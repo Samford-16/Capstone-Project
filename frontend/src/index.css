@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* Current design tokens (carried over from the May prototype's base.css). */
+@theme {
+  --color-primary: #0891b2;
+  --color-primary-dark: #0e7490;
+  --color-primary-light: #e0f2fe;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
+  --color-canvas: #f8fafc;
+
+  --color-stage-1: #fde047;
+  --color-stage-2: #86efac;
+  --color-stage-3: #7dd3fc;
+  --color-stage-4: #c4b5fd;
+  --color-stage-5: #f9a8d4;
+
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    color: var(--color-ink);
+    background: var(--color-canvas);
+  }
+  body {
+    min-height: 100vh;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+/* Base button, declared as a utility so the variants below can @apply it. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@layer components {
+  .btn-primary {
+    @apply btn bg-primary text-white hover:bg-primary-dark;
+  }
+  .btn-secondary {
+    @apply btn border border-line-strong bg-white text-ink hover:bg-canvas;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-ghost {
+    @apply btn text-ink hover:bg-slate-100;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line-strong bg-white px-3 py-2 text-sm text-ink placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-white shadow-sm;
+  }
+  .table-wrap {
+    @apply overflow-x-auto rounded-xl border border-line bg-white shadow-sm;
+  }
+  .table {
+    @apply w-full text-left text-sm;
+  }
+  .table th {
+    @apply border-b border-line bg-canvas px-4 py-2.5 text-xs font-semibold tracking-wide whitespace-nowrap text-muted uppercase;
+  }
+  .table td {
+    @apply border-b border-line px-4 py-3 align-middle;
+  }
+  .table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+}

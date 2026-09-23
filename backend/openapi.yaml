@@ -1,0 +1,573 @@
+openapi: 3.1.0
+info:
+  title: Current API
+  version: 0.1.0
+  description: |
+    REST API for Current, a swim lesson management system (ISI 490 capstone).
+
+    Authentication: `POST /auth/login` returns a JWT. Send it as
+    `Authorization: Bearer <token>` on every other request.
+
+    Roles: ADMIN, COACH, PARENT, SWIMMER. Each endpoint lists who may call it.
+    Money is always integer cents. Dates are `YYYY-MM-DD`. Times are 24-hour `HH:MM`.
+    `dayOfWeek` is 0 (Sunday) to 6 (Saturday).
+
+    Errors return `{ "error": "message", "code": "MACHINE_CODE" }` with a 4xx status.
+servers:
+  - url: /api
+security:
+  - bearer: []
+
+tags:
+  - name: Auth
+  - name: Users
+  - name: Stages & Pricing
+  - name: Swimmers
+  - name: Lessons
+  - name: Templates
+  - name: Enrollments
+  - name: Invoices
+  - name: Reports
+
+paths:
+  /health:
+    get:
+      tags: [Auth]
+      summary: Health check (database reachable)
+      security: []
+      responses: { "200": { description: OK } }
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Family sign-up (PARENT with children, or SWIMMER with their own login)
+      description: Coaches and admins cannot sign up. An admin creates them with POST /users.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [accountType, name, email, password]
+                  properties:
+                    accountType: { const: PARENT }
+                    name: { type: string }
+                    email: { type: string, format: email }
+                    password: { type: string, minLength: 8 }
+                    phone: { type: string }
+                    swimmers: { type: array, items: { $ref: "#/components/schemas/SwimmerInput" } }
+                - type: object
+                  required: [accountType, name, email, password]
+                  properties:
+                    accountType: { const: SWIMMER }
+                    name: { type: string }
+                    email: { type: string, format: email }
+                    password: { type: string, minLength: 8 }
+                    dateOfBirth: { type: string, format: date }
+                    stageId: { type: integer, minimum: 1, maximum: 5 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/AuthResult" } } } }
+        "409": { description: Email already in use (EMAIL_TAKEN) }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties: { email: { type: string }, password: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AuthResult" } } } }
+        "401": { description: Invalid email or password (BAD_CREDENTIALS) }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user with their swimmers
+      responses: { "200": { description: OK } }
+
+  /coaches:
+    get:
+      tags: [Users]
+      summary: Active coaches (for filters). Any signed-in user.
+      responses: { "200": { description: "[{ id, name }]" } }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users. ADMIN.
+      parameters:
+        - { name: role, in: query, schema: { $ref: "#/components/schemas/Role" } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: active, in: query, schema: { type: string, enum: ["true", "false"] } }
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Users]
+      summary: Create any account, including coaches and admins. ADMIN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, role]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                password: { type: string, minLength: 8 }
+                role: { $ref: "#/components/schemas/Role" }
+                phone: { type: string }
+      responses: { "201": { description: Created }, "409": { description: EMAIL_TAKEN } }
+
+  /users/{id}:
+    patch:
+      tags: [Users]
+      summary: Update name, phone, role, password, or deactivate. ADMIN. Accounts are never deleted.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+                role: { $ref: "#/components/schemas/Role" }
+                active: { type: boolean }
+                password: { type: string }
+      responses: { "200": { description: OK }, "400": { description: SELF_LOCKOUT }, "409": { description: COACH_HAS_LESSONS } }
+
+  /stages:
+    get:
+      tags: [Stages & Pricing]
+      summary: Stages 1 to 5 with today's price per session. Public.
+      security: []
+      responses: { "200": { description: OK } }
+
+  /pricing:
+    get:
+      tags: [Stages & Pricing]
+      summary: Price history per stage (current, upcoming, history). ADMIN.
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Stages & Pricing]
+      summary: Add a price per session for a stage from a date. ADMIN.
+      description: Invoices already issued keep their rate. New enrollments use the newest rate whose effectiveFrom is on or before the enrollment date.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stageId, priceCents, effectiveFrom]
+              properties:
+                stageId: { type: integer, minimum: 1, maximum: 5 }
+                priceCents: { type: integer, minimum: 0 }
+                effectiveFrom: { type: string, format: date }
+      responses: { "201": { description: Created }, "409": { description: Duplicate effective date } }
+
+  /swimmers:
+    get:
+      tags: [Swimmers]
+      summary: Swimmers the caller may see (admin all, coach their rosters, parent their children, swimmer self)
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Swimmers]
+      summary: Add a child. PARENT (to self) or ADMIN (with parentId).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SwimmerInput"
+                - type: object
+                  properties: { parentId: { type: integer, description: Required for ADMIN } }
+      responses: { "201": { description: Created } }
+
+  /swimmers/{id}:
+    patch:
+      tags: [Swimmers]
+      summary: Edit a swimmer. Families edit names and birthdays; only ADMIN or the swimmer's COACH may change stageId.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName: { type: string }
+                lastName: { type: string }
+                dateOfBirth: { type: [string, "null"], format: date }
+                stageId: { type: [integer, "null"] }
+      responses: { "200": { description: OK }, "403": { description: Not allowed } }
+
+  /lessons:
+    get:
+      tags: [Lessons]
+      summary: Weekly lessons with live enrollment. COACH sees only their own.
+      parameters:
+        - { name: stageId, in: query, schema: { type: integer } }
+        - { name: coachId, in: query, schema: { type: integer } }
+        - { name: dayOfWeek, in: query, schema: { type: integer, minimum: 0, maximum: 6 } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, CANCELLED, ALL], default: ACTIVE } }
+        - { name: availability, in: query, schema: { type: string, enum: [open, full] } }
+        - { name: enrolled, in: query, description: "Families: lessons their swimmers are (not) in. Staff: lessons with (no) enrollments.", schema: { type: string, enum: ["true", "false"] } }
+        - { name: includePast, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: sort, in: query, schema: { type: string, enum: [time, stage, coach, spots], default: time } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Lesson" } } } } }
+    post:
+      tags: [Lessons]
+      summary: Create one lesson and its sessions. ADMIN.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/LessonInput" } } }
+      responses: { "201": { description: Created }, "409": { description: COACH_CONFLICT } }
+
+  /lessons/{id}:
+    get:
+      tags: [Lessons]
+      summary: Lesson detail with sessions. ADMIN and the lesson's COACH also get the roster.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: OK }, "403": { description: Coach viewing another coach's lesson } }
+    patch:
+      tags: [Lessons]
+      summary: Edit name, coach, capacity, location or times. ADMIN. Stage, day and dates are fixed.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                coachId: { type: [integer, "null"] }
+                capacity: { type: integer }
+                location: { type: string }
+                startTime: { type: string }
+                endTime: { type: string }
+      responses: { "200": { description: OK }, "409": { description: CAPACITY_TOO_LOW or COACH_CONFLICT } }
+    delete:
+      tags: [Lessons]
+      summary: Delete a lesson nobody ever enrolled in. ADMIN. Otherwise cancel it.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "204": { description: Deleted }, "409": { description: HAS_HISTORY } }
+
+  /lessons/{id}/cancel:
+    post:
+      tags: [Lessons]
+      summary: Cancel a lesson, its enrollments, and void its unpaid invoices. ADMIN.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelledEnrollments: { type: integer }
+                  voidedInvoices: { type: integer }
+                  invoicesNeedingRefund: { type: integer }
+
+  /sessions:
+    get:
+      tags: [Lessons]
+      summary: Dated sessions in a range (daily view). Same visibility as /lessons.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: stageId, in: query, schema: { type: integer } }
+        - { name: coachId, in: query, schema: { type: integer } }
+      responses: { "200": { description: "[{ id, date, cancelled, lesson }]" } }
+
+  /sessions/{id}:
+    patch:
+      tags: [Lessons]
+      summary: Cancel or restore one session (pool closed). ADMIN.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { cancelled: { type: boolean } } } } }
+      responses: { "200": { description: OK } }
+
+  /templates:
+    get:
+      tags: [Templates]
+      summary: List schedule templates. ADMIN.
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Templates]
+      summary: Create a template of weekly slots. ADMIN.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TemplateInput" } } }
+      responses: { "201": { description: Created } }
+
+  /templates/{id}:
+    get:
+      tags: [Templates]
+      summary: Template detail. ADMIN.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: OK } }
+    put:
+      tags: [Templates]
+      summary: Replace a template's name and slots. ADMIN. Lessons already created are not changed.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TemplateInput" } } }
+      responses: { "200": { description: OK } }
+    delete:
+      tags: [Templates]
+      summary: Delete a template. ADMIN. Lessons created from it stay.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "204": { description: Deleted } }
+
+  /templates/{id}/apply:
+    post:
+      tags: [Templates]
+      summary: Create lessons from every slot across a date range. ADMIN. All-or-nothing.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startDate, endDate]
+              properties: { startDate: { type: string, format: date }, endDate: { type: string, format: date } }
+      responses:
+        "201": { description: "{ createdLessons, lessonIds }" }
+        "409": { description: COACH_CONFLICT (nothing was created) }
+
+  /enrollments:
+    get:
+      tags: [Enrollments]
+      summary: Enrollments the caller may see.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, CANCELLED, ALL], default: ACTIVE } }
+        - { name: lessonId, in: query, schema: { type: integer } }
+      responses: { "200": { description: OK } }
+    post:
+      tags: [Enrollments]
+      summary: Enroll a swimmer and issue the invoice. ADMIN, PARENT (own children), SWIMMER (self).
+      description: |
+        Runs in one transaction that locks the lesson row, so capacity holds under
+        concurrent requests. Invoice = sessions remaining from today x the stage
+        rate effective today.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lessonId, swimmerId]
+              properties: { lessonId: { type: integer }, swimmerId: { type: integer } }
+      responses:
+        "201": { description: Enrollment with its invoice }
+        "403": { description: Not your swimmer }
+        "409": { description: "LESSON_FULL, ALREADY_ENROLLED, LESSON_CANCELLED, LESSON_ENDED, NO_SESSIONS_LEFT, NO_PRICE" }
+
+  /enrollments/{id}/cancel:
+    post:
+      tags: [Enrollments]
+      summary: Cancel. Voids the invoice if nothing was paid; otherwise flags it for refund review.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: "{ invoiceAction: voided | refund_review | none }" } }
+
+  /invoices:
+    get:
+      tags: [Invoices]
+      summary: ADMIN sees all; PARENT and SWIMMER see invoices billed to them; COACH gets 403.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [UNPAID, PAID, VOID, REFUNDED] } }
+        - { name: stageId, in: query, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Invoice" } } } } }
+
+  /invoices/{id}:
+    get:
+      tags: [Invoices]
+      summary: Invoice with payments.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: OK } }
+
+  /invoices/{id}/payments:
+    post:
+      tags: [Invoices]
+      summary: Record a payment
+      description: |
+        ADMIN records money received at the desk: `{ amountCents, method, reference }`, up to the balance.
+        PARENT/SWIMMER pay the full balance online: `{ card: { name, number, exp: "MM/YY", cvc } }`.
+        Card checkout is simulated (Luhn check; 4000 0000 0000 0002 is declined). Card details are not stored.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [amountCents, method]
+                  properties:
+                    amountCents: { type: integer }
+                    method: { type: string, enum: [CASH, CHECK, CARD] }
+                    reference: { type: string }
+                - type: object
+                  required: [card]
+                  properties:
+                    card:
+                      type: object
+                      properties: { name: { type: string }, number: { type: string }, exp: { type: string }, cvc: { type: string } }
+      responses:
+        "201": { description: "{ payment, invoice }" }
+        "400": { description: "CARD_INVALID, CARD_DECLINED, or amount over balance" }
+        "409": { description: ALREADY_PAID or INVOICE_VOID }
+
+  /invoices/{id}/refund:
+    post:
+      tags: [Invoices]
+      summary: Refund up to the amount paid (default all). ADMIN.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { amountCents: { type: integer }, method: { type: string }, reason: { type: string } }
+      responses: { "200": { description: OK }, "409": { description: NOTHING_TO_REFUND } }
+
+  /invoices/{id}/void:
+    post:
+      tags: [Invoices]
+      summary: Void an invoice with no payments. ADMIN.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses: { "200": { description: OK }, "409": { description: HAS_PAYMENTS } }
+
+  /reports/summary:
+    get:
+      tags: [Reports]
+      summary: Financial summary by stage or month. ADMIN.
+      description: Invoiced and outstanding use the invoice issue date. Collected and refunded use the date money moved.
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: groupBy, in: query, schema: { type: string, enum: [stage, month], default: stage } }
+      responses: { "200": { description: "{ rows[], totals }" } }
+
+  /reports/overview:
+    get:
+      tags: [Reports]
+      summary: Dashboard numbers (lessons, fill rate, outstanding, collected this month). ADMIN.
+      responses: { "200": { description: OK } }
+
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: integer } }
+  schemas:
+    Role: { type: string, enum: [ADMIN, COACH, PARENT, SWIMMER] }
+    AuthResult:
+      type: object
+      properties:
+        token: { type: string }
+        user:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            email: { type: string }
+            role: { $ref: "#/components/schemas/Role" }
+            swimmers: { type: array, items: { type: object } }
+    SwimmerInput:
+      type: object
+      required: [firstName, lastName]
+      properties:
+        firstName: { type: string }
+        lastName: { type: string }
+        dateOfBirth: { type: string, format: date }
+        stageId: { type: integer, minimum: 1, maximum: 5 }
+    LessonInput:
+      type: object
+      required: [stageId, dayOfWeek, startTime, endTime, capacity, startDate, endDate]
+      properties:
+        name: { type: string, description: Defaults to "Stage N · Day time" }
+        stageId: { type: integer, minimum: 1, maximum: 5 }
+        coachId: { type: [integer, "null"] }
+        dayOfWeek: { type: integer, minimum: 0, maximum: 6 }
+        startTime: { type: string, example: "16:00" }
+        endTime: { type: string, example: "16:45" }
+        capacity: { type: integer, minimum: 1 }
+        location: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+    TemplateInput:
+      type: object
+      required: [name, slots]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        slots:
+          type: array
+          items:
+            type: object
+            required: [stageId, dayOfWeek, startTime, endTime, capacity]
+            properties:
+              name: { type: string }
+              stageId: { type: integer }
+              coachId: { type: [integer, "null"] }
+              dayOfWeek: { type: integer }
+              startTime: { type: string }
+              endTime: { type: string }
+              capacity: { type: integer }
+              location: { type: string }
+    Lesson:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        stage: { type: object, properties: { id: { type: integer }, name: { type: string }, color: { type: string } } }
+        coach: { type: [object, "null"], properties: { id: { type: integer }, name: { type: string } } }
+        dayOfWeek: { type: integer }
+        startTime: { type: string }
+        endTime: { type: string }
+        location: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        status: { type: string, enum: [ACTIVE, CANCELLED] }
+        capacity: { type: integer }
+        enrolledCount: { type: integer }
+        spotsLeft: { type: integer }
+        isFull: { type: boolean }
+        remainingSessions: { type: integer }
+        pricePerSessionCents: { type: integer }
+        myEnrollments:
+          type: array
+          description: For families, which of their swimmers are enrolled
+          items: { type: object, properties: { enrollmentId: { type: integer }, swimmerId: { type: integer } } }
+    Invoice:
+      type: object
+      properties:
+        id: { type: integer }
+        number: { type: string, example: INV-00012 }
+        status: { type: string, enum: [UNPAID, PAID, VOID, REFUNDED] }
+        amountCents: { type: integer }
+        paidCents: { type: integer }
+        balanceCents: { type: integer }
+        sessionCount: { type: integer }
+        ratePerSessionCents: { type: integer }
+        issuedAt: { type: string, format: date-time }
+        dueDate: { type: string, format: date }
+        payments: { type: array, items: { type: object } }
