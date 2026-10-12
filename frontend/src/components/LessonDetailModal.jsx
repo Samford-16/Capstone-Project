@@ -91,7 +91,12 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
             <dt className="text-muted">When</dt>
             <dd>{DAYS[lesson.dayOfWeek]}s, {timeRange(lesson.startTime, lesson.endTime)}</dd>
             <dt className="text-muted">Dates</dt>
-            <dd>{shortDate(lesson.startDate)} to {shortDate(lesson.endDate)} · {lesson.remainingSessions} session(s) left</dd>
+            <dd>
+              {lesson.sessions.length
+                ? `${shortDate(lesson.sessions[0].date)} to ${shortDate(lesson.sessions[lesson.sessions.length - 1].date)}`
+                : `${shortDate(lesson.startDate)} to ${shortDate(lesson.endDate)}`}
+              {" · "}{lesson.remainingSessions} session(s) left
+            </dd>
             {lesson.location && (<><dt className="text-muted">Where</dt><dd>{lesson.location}</dd></>)}
             <dt className="text-muted">Stage</dt>
             <dd>{lesson.stage.name}</dd>
@@ -100,7 +105,7 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
                 <dt className="text-muted">Price</dt>
                 <dd>
                   {money(lesson.pricePerSessionCents)} per session
-                  {lesson.remainingSessions > 0 && (
+                  {isFamily && lesson.remainingSessions > 0 && (
                     <span className="text-muted"> · {money(lesson.pricePerSessionCents * lesson.remainingSessions)} if you enroll today</span>
                   )}
                 </dd>

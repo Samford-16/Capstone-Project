@@ -43,6 +43,8 @@ export default function Schedule() {
   const activeFilterCount = ["stageId", "coachId", "dayOfWeek", "availability", "enrolled"].filter((k) => filters[k]).length;
 
   const lessons = useApi(`/lessons${qs(filters)}`);
+  // Unfiltered list for the stat tiles, so totals don't change when filters do.
+  const allLessons = useApi("/lessons");
   const sessions = useApi(
     view === "day" ? `/sessions${qs({ from: day, to: day, stageId: filters.stageId, coachId: filters.coachId })}` : null,
   );
@@ -53,6 +55,7 @@ export default function Schedule() {
 
   const reloadAll = () => {
     lessons.reload();
+    allLessons.reload();
     if (view === "day") sessions.reload();
     if (isAdmin) overview.reload();
     if (isFamily) unpaid.reload();
@@ -73,6 +76,7 @@ export default function Schedule() {
   }, [sessions.data, filters, isFamily]);
 
   const rows = lessons.data || [];
+  const allRows = allLessons.data || [];
 
   return (
     <>
@@ -97,19 +101,19 @@ export default function Schedule() {
             <StatTile label="Collected this month" value={money(overview.data.collectedThisMonthCents)} />
           </>
         )}
-        {isCoach && lessons.data && (
+        {isCoach && allLessons.data && (
           <>
-            <StatTile label="My lessons" value={rows.length} />
-            <StatTile label="Swimmers" value={rows.reduce((s, l) => s + l.enrolledCount, 0)} />
-            <StatTile label="Classes per week" value={rows.length} />
-            <StatTile label="Open seats" value={rows.reduce((s, l) => s + l.spotsLeft, 0)} />
+            <StatTile label="My lessons" value={allRows.length} />
+            <StatTile label="Swimmers" value={allRows.reduce((s, l) => s + l.enrolledCount, 0)} />
+            <StatTile label="Classes per week" value={allRows.length} />
+            <StatTile label="Open seats" value={allRows.reduce((s, l) => s + l.spotsLeft, 0)} />
           </>
         )}
-        {isFamily && lessons.data && (
+        {isFamily && allLessons.data && (
           <>
-            <StatTile label="Enrolled classes" value={rows.reduce((s, l) => s + l.myEnrollments.length, 0)} />
+            <StatTile label="Enrolled classes" value={allRows.reduce((s, l) => s + l.myEnrollments.length, 0)} />
             <StatTile label="Balance due" value={money((unpaid.data || []).reduce((s, i) => s + i.balanceCents, 0))} sub={`${(unpaid.data || []).length} unpaid invoice(s)`} />
-            <StatTile label="Classes with openings" value={rows.filter((l) => !l.isFull).length} />
+            <StatTile label="Classes with openings" value={allRows.filter((l) => !l.isFull).length} />
             <StatTile label={isFamily && user.role === "PARENT" ? "Swimmers" : "My stage"} value={user.role === "PARENT" ? user.swimmers.length : user.swimmers[0]?.stageId ? `Stage ${user.swimmers[0].stageId}` : "-"} />
           </>
         )}

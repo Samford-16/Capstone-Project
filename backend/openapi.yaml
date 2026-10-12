@@ -409,8 +409,9 @@ paths:
       summary: Record a payment
       description: |
         ADMIN records money received at the desk: `{ amountCents, method, reference }`, up to the balance.
-        PARENT/SWIMMER pay the full balance online: `{ card: { name, number, exp: "MM/YY", cvc } }`.
-        Card checkout is simulated (Luhn check; 4000 0000 0000 0002 is declined). Card details are not stored.
+        PARENT/SWIMMER: only when Stripe is NOT configured, pay the full balance with the simulated card form:
+        `{ card: { name, number, exp: "MM/YY", cvc } }` (Luhn check; 4000 0000 0000 0002 is declined).
+        With Stripe configured this returns 409 USE_CHECKOUT; use /invoices/{id}/checkout instead.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         required: true
@@ -435,10 +436,46 @@ paths:
         "400": { description: "CARD_INVALID, CARD_DECLINED, or amount over balance" }
         "409": { description: ALREADY_PAID or INVOICE_VOID }
 
+  /invoices/{id}/checkout:
+    post:
+      tags: [Invoices]
+      summary: Start a Stripe Checkout for the invoice balance. PARENT or SWIMMER (own invoice).
+      description: Returns Stripe's hosted payment page URL. After paying, Stripe redirects to /billing?checkout=success&invoice={id}&session_id={CHECKOUT_SESSION_ID}.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "201": { description: "{ url, sessionId }" }
+        "403": { description: Not the family's invoice, or caller is staff }
+        "409": { description: "STRIPE_NOT_CONFIGURED, ALREADY_PAID, INVOICE_VOID" }
+        "502": { description: STRIPE_ERROR }
+
+  /invoices/{id}/checkout/confirm:
+    post:
+      tags: [Invoices]
+      summary: Confirm a finished Stripe Checkout and record the payment (idempotent).
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [sessionId], properties: { sessionId: { type: string, example: cs_test_123 } } }
+      responses:
+        "200": { description: "{ duplicate, payment, invoice }" }
+        "400": { description: Session belongs to a different invoice }
+        "409": { description: NOT_PAID }
+
+  /stripe/webhook:
+    post:
+      tags: [Invoices]
+      summary: Stripe webhook (checkout.session.completed). Verified with STRIPE_WEBHOOK_SECRET.
+      security: []
+      responses:
+        "200": { description: "{ received: true }" }
+        "400": { description: BAD_SIGNATURE }
+
   /invoices/{id}/refund:
     post:
       tags: [Invoices]
-      summary: Refund up to the amount paid (default all). ADMIN.
+      summary: Refund up to the amount paid (default all). ADMIN. Stripe card payments are refunded through Stripe.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         content:

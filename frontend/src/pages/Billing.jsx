@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import Modal from "../components/Modal";
 import PaymentModal from "../components/PaymentModal";
 import { EmptyState, ErrorBanner, PageHeader, Spinner, StatTile, StatusPill } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useApi } from "../lib/useApi";
+import { api } from "../lib/api";
 import { dateTime, money, shortDate, todayISO } from "../lib/format";
 
 /** Family billing: invoices billed to me, pay online, view receipts. */
@@ -12,6 +14,44 @@ export default function Billing() {
   const invoices = useApi("/invoices");
   const [paying, setPaying] = useState(null);
   const [viewing, setViewing] = useState(null);
+  const [redirecting, setRedirecting] = useState(null);
+  const [params, setParams] = useSearchParams();
+  const confirmed = useRef(false);
+
+  // Coming back from Stripe: confirm the payment, then clean up the URL.
+  useEffect(() => {
+    const status = params.get("checkout");
+    if (!status || confirmed.current) return;
+    confirmed.current = true;
+    if (status === "cancelled") {
+      toast("Checkout cancelled. Nothing was charged.", "error");
+      setParams({}, { replace: true });
+      return;
+    }
+    const invoiceId = params.get("invoice");
+    const sessionId = params.get("session_id");
+    api
+      .post(`/invoices/${invoiceId}/checkout/confirm`, { sessionId })
+      .then((res) => toast(`Payment received through Stripe for ${res.invoice.number}.`))
+      .catch((err) => toast(err.message, "error"))
+      .finally(() => {
+        setParams({}, { replace: true });
+        invoices.reload();
+      });
+  }, [params, setParams, toast, invoices]);
+
+  // Pay: go to Stripe Checkout. If Stripe isn't set up, use the built-in demo checkout.
+  async function pay(inv) {
+    setRedirecting(inv.id);
+    try {
+      const { url } = await api.post(`/invoices/${inv.id}/checkout`);
+      window.location.assign(url);
+    } catch (err) {
+      setRedirecting(null);
+      if (err.code === "STRIPE_NOT_CONFIGURED") setPaying(inv);
+      else toast(err.message, "error");
+    }
+  }
   const list = invoices.data || [];
   const open = list.filter((i) => i.status === "UNPAID");
   const today = todayISO();
@@ -59,7 +99,9 @@ export default function Billing() {
                     <td className="text-sm whitespace-nowrap">{shortDate(inv.dueDate)}</td>
                     <td className="text-right whitespace-nowrap">
                       {inv.status === "UNPAID" && inv.balanceCents > 0 ? (
-                        <button className="btn-primary btn-sm" onClick={() => setPaying(inv)}>Pay now</button>
+                        <button className="btn-primary btn-sm" disabled={redirecting !== null} onClick={() => pay(inv)}>
+                          {redirecting === inv.id ? "Opening checkout..." : "Pay now"}
+                        </button>
                       ) : (
                         <button className="btn-ghost btn-sm" onClick={() => setViewing(inv)}>Details</button>
                       )}

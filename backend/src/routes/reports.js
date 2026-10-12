@@ -56,7 +56,7 @@ router.get("/reports/summary", async (req, res) => {
     }
     r.invoiceCount += 1;
     r.invoicedCents += inv.amountCents;
-    r.outstandingCents += Math.max(inv.amountCents - netPaid(inv.payments), 0);
+    if (inv.status === "UNPAID") r.outstandingCents += Math.max(inv.amountCents - netPaid(inv.payments), 0);
   }
   for (const p of payments) {
     const key = q.groupBy === "stage" ? String(p.invoice.stageId) : monthKey(p.receivedAt);

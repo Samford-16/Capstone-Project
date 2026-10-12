@@ -2,7 +2,9 @@ const express = require("express");
 const { prisma } = require("../db");
 const { authenticate, requireRole } = require("../middleware/auth");
 const { badRequest, conflict, forbidden, notFound, idParam } = require("../lib/http");
-const { netPaid, refreshInvoiceStatus, serializeInvoice, INVOICE_INCLUDE } = require("../lib/billing");
+const { netPaid, refreshInvoiceStatus, serializeInvoice, invoiceNumber, INVOICE_INCLUDE } = require("../lib/billing");
+const { getStripe, stripeEnabled, callStripe, recordCheckoutSession } = require("../lib/stripe");
+const config = require("../config");
 const { chargeCard } = require("../lib/cards");
 const { toDate, addDays } = require("../lib/dates");
 const { z, isoDate, stageId } = require("../lib/schemas");
@@ -75,6 +77,9 @@ router.post("/invoices/:id/payments", async (req, res) => {
       });
     }
 
+    if (stripeEnabled()) {
+      throw conflict("Online payments go through Stripe checkout.", "USE_CHECKOUT");
+    }
     const body = z
       .object({ card: z.object({ name: z.string(), number: z.string(), exp: z.string(), cvc: z.string() }) })
       .parse(req.body);
@@ -87,6 +92,68 @@ router.post("/invoices/:id/payments", async (req, res) => {
   await refreshInvoiceStatus(prisma, invoiceId);
   const invoice = await loadInvoice(prisma, invoiceId, req.user);
   res.status(201).json({ payment, invoice: serializeInvoice(invoice) });
+});
+
+/**
+ * Family: start a Stripe Checkout for the invoice balance. Returns the URL of
+ * Stripe's hosted payment page; the browser goes there, then comes back to
+ * /billing with the session id so the payment can be confirmed.
+ */
+router.post("/invoices/:id/checkout", async (req, res) => {
+  const invoiceId = idParam(req.params.id);
+  if (req.user.role !== "PARENT" && req.user.role !== "SWIMMER") {
+    throw forbidden("Only families pay online. Use Record payment for money taken at the desk.");
+  }
+  const invoice = await loadInvoice(prisma, invoiceId, req.user);
+  if (invoice.status === "VOID") throw conflict("This invoice was voided.", "INVOICE_VOID");
+  const balance = invoice.amountCents - netPaid(invoice.payments);
+  if (balance <= 0 || invoice.status !== "UNPAID") throw conflict("This invoice is already paid.", "ALREADY_PAID");
+
+  const stripe = getStripe();
+  const swimmer = invoice.enrollment?.swimmer;
+  const lesson = invoice.enrollment?.lesson;
+  const session = await callStripe(() =>
+    stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: req.user.email,
+      client_reference_id: String(invoice.id),
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: balance,
+            product_data: {
+              name: `${invoiceNumber(invoice.id)} · ${lesson ? lesson.name : "Swim lessons"}`,
+              description: `${swimmer ? `${swimmer.firstName} ${swimmer.lastName}, ` : ""}${invoice.sessionCount} sessions at $${(invoice.ratePerSessionCents / 100).toFixed(2)}`,
+            },
+          },
+        },
+      ],
+      metadata: { invoiceId: String(invoice.id), userId: String(req.user.id) },
+      payment_intent_data: { metadata: { invoiceId: String(invoice.id) } },
+      success_url: `${config.appUrl}/billing?checkout=success&invoice=${invoice.id}&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${config.appUrl}/billing?checkout=cancelled`,
+    }),
+  );
+  res.status(201).json({ url: session.url, sessionId: session.id });
+});
+
+/** Family returns from Stripe: look the session up with Stripe and record the payment once. */
+router.post("/invoices/:id/checkout/confirm", async (req, res) => {
+  const invoiceId = idParam(req.params.id);
+  const { sessionId } = z.object({ sessionId: z.string().startsWith("cs_") }).parse(req.body);
+  await loadInvoice(prisma, invoiceId, req.user);
+  const session = await callStripe(() => getStripe().checkout.sessions.retrieve(sessionId));
+  if (Number(session.metadata && session.metadata.invoiceId) !== invoiceId) {
+    throw badRequest("That checkout belongs to a different invoice.");
+  }
+  const result = await recordCheckoutSession(session);
+  res.json({
+    duplicate: result.duplicate,
+    payment: result.payment,
+    invoice: serializeInvoice(await loadInvoice(prisma, invoiceId, req.user)),
+  });
 });
 
 // Admin: give money back, up to what was paid.
@@ -108,17 +175,28 @@ router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
     const amount = body.amountCents ?? paid;
     if (amount > paid) throw badRequest(`Refund is more than the $${(paid / 100).toFixed(2)} paid.`);
     const lastPayment = [...invoice.payments].reverse().find((p) => p.kind === "PAYMENT");
+    let method = body.method || lastPayment.method;
+    let reference = body.reason || null;
+
+    // Money paid through Stripe goes back through Stripe, to the same card.
+    const stripePayment = [...invoice.payments]
+      .reverse()
+      .find((p) => p.kind === "PAYMENT" && p.method === "CARD" && p.reference && p.reference.startsWith("pi_"));
+    if (stripePayment) {
+      if (amount > stripePayment.amountCents) {
+        throw badRequest(`Stripe refunds go back to one card payment at a time. The most you can refund here is $${(stripePayment.amountCents / 100).toFixed(2)}.`);
+      }
+      const refund = await callStripe(() =>
+        getStripe().refunds.create({ payment_intent: stripePayment.reference, amount, metadata: { invoiceId: String(invoiceId) } }),
+      );
+      method = "CARD";
+      reference = body.reason ? `${refund.id} · ${body.reason}` : refund.id;
+    }
+
     await tx.payment.create({
-      data: {
-        invoiceId,
-        kind: "REFUND",
-        method: body.method || lastPayment.method,
-        amountCents: amount,
-        reference: body.reason || null,
-        recordedById: req.user.id,
-      },
+      data: { invoiceId, kind: "REFUND", method, amountCents: amount, reference, recordedById: req.user.id },
     });
-  });
+  }, { timeout: 20000 });
 
   await refreshInvoiceStatus(prisma, invoiceId);
   res.json(serializeInvoice(await loadInvoice(prisma, invoiceId, req.user)));

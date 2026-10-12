@@ -70,7 +70,8 @@ function serializeInvoice(inv) {
     status: inv.status,
     amountCents: inv.amountCents,
     paidCents: paid,
-    balanceCents: inv.status === "VOID" ? 0 : Math.max(inv.amountCents - paid, 0),
+    // A void or refunded invoice is settled: nothing is owed on it.
+    balanceCents: inv.status === "VOID" || inv.status === "REFUNDED" ? 0 : Math.max(inv.amountCents - paid, 0),
     sessionCount: inv.sessionCount,
     ratePerSessionCents: inv.ratePerSessionCents,
     stageId: inv.stageId,

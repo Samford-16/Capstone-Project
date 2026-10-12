@@ -12,12 +12,14 @@ export default function Invoices() {
   const toast = useToast();
   const [filters, setFilters] = useState({ status: "", stageId: "" });
   const [search, setSearch] = useState("");
+  const [needsRefund, setNeedsRefund] = useState(false);
   const invoices = useApi(`/invoices${qs(filters)}`);
   const [recording, setRecording] = useState(null);
   const [viewing, setViewing] = useState(null);
   const today = todayISO();
 
   const list = (invoices.data || []).filter((i) => {
+    if (needsRefund && !(i.enrollment?.status === "CANCELLED" && i.paidCents > 0)) return false;
     if (!search) return true;
     const hay = `${i.number} ${i.billedTo?.name} ${i.enrollment?.swimmer?.name} ${i.enrollment?.lesson?.name}`.toLowerCase();
     return hay.includes(search.toLowerCase());
@@ -55,6 +57,10 @@ export default function Invoices() {
             <option value="REFUNDED">Refunded</option>
             <option value="VOID">Void</option>
           </select>
+        </label>
+        <label className="flex items-center gap-2 pb-2 text-sm">
+          <input type="checkbox" checked={needsRefund} onChange={(e) => setNeedsRefund(e.target.checked)} />
+          Needs refund review only
         </label>
         <label>
           <span className="label">Stage</span>
@@ -99,7 +105,12 @@ export default function Invoices() {
                     <td className="text-right tabular-nums">{money(inv.amountCents)}</td>
                     <td className="text-right tabular-nums">{money(inv.paidCents)}</td>
                     <td className="text-right font-semibold tabular-nums">{money(inv.balanceCents)}</td>
-                    <td><StatusPill status={overdue ? "OVERDUE" : inv.status} label={overdue ? "overdue" : undefined} /></td>
+                    <td>
+                      <StatusPill status={overdue ? "OVERDUE" : inv.status} label={overdue ? "overdue" : undefined} />
+                      {inv.enrollment?.status === "CANCELLED" && inv.paidCents > 0 && (
+                        <div className="mt-1"><StatusPill status="OVERDUE" label="needs refund review" /></div>
+                      )}
+                    </td>
                     <td className="text-sm whitespace-nowrap">{shortDate(inv.dueDate)}</td>
                     <td className="text-right whitespace-nowrap">
                       {inv.status === "UNPAID" && <button className="btn-primary btn-sm" onClick={() => setRecording(inv)}>Record payment</button>}

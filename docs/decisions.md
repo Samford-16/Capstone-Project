@@ -5,6 +5,12 @@ Entries that were later replaced are marked **Superseded** and link to what repl
 
 ---
 
+## 2026-10-12: Stripe Checkout for online payments (test mode)
+**Decision:** Families pay through Stripe Checkout, Stripe's hosted payment page. The backend creates a checkout session for the invoice balance; when the family returns, the backend retrieves the session from Stripe and records the payment. A signed webhook records it too, in case the family closes the tab. The PaymentIntent id (`pi_...`) is the payment reference and is checked under a row lock, so a payment is recorded exactly once no matter how many times it's confirmed. Refunds of Stripe payments are sent back through Stripe's Refunds API.
+**Why:** The backend proposal's stretch goal. Hosted Checkout keeps card data off our server entirely (the simplest PCI posture) and needs less code than building a card form with Stripe Elements.
+**Tradeoff:** Families leave the app briefly to pay. Only test-mode keys (`sk_test_`) are accepted, on purpose.
+**Supersedes:** the simulated card checkout as the main way to pay online. It remains as the fallback when no Stripe key is set, and the automated tests use a fake Stripe client.
+
 ## 2026-09-23: Stack matches the proposals
 **Decision:** Frontend is React + Vite + Tailwind CSS. Backend is Node.js + Express + PostgreSQL + Prisma ORM, with JWT auth. Monorepo: `frontend/` and `backend/`.
 **Why:** These are the stacks named in the approved proposals (Sami: React, Tailwind, Vite; William: Express, PostgreSQL, Prisma). The May prototype (plain JS + localStorage) and William's SwimSync code (MySQL + raw SQL) were reused for ideas, design and logic, not as the codebase.

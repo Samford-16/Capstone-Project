@@ -259,6 +259,7 @@ describe("Bookkeeping", () => {
     const refund = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away" });
     assert.equal(refund.body.status, "REFUNDED");
     assert.equal(refund.body.paidCents, 0);
+    assert.equal(refund.body.balanceCents, 0, "a refunded invoice owes nothing");
     assert.equal((await api(parent).post(`/invoices/${inv.id}/refund`)).status, 403);
   });
 
@@ -286,6 +287,9 @@ describe("Bookkeeping", () => {
     }
     const dbInvoiced = await prisma.invoice.aggregate({ where: { status: { not: "VOID" } }, _sum: { amountCents: true } });
     assert.equal(byStage.totals.invoicedCents, dbInvoiced._sum.amountCents);
+    const unpaid = await prisma.invoice.findMany({ where: { status: "UNPAID" }, include: { payments: true } });
+    const owed = unpaid.reduce((s, i) => s + i.amountCents - i.payments.reduce((p, x) => p + (x.kind === "REFUND" ? -x.amountCents : x.amountCents), 0), 0);
+    assert.equal(byStage.totals.outstandingCents, owed, "only unpaid invoices count as outstanding");
   });
 });
 

@@ -6,6 +6,8 @@ const { notFoundHandler, errorHandler } = require("./middleware/errors");
 
 const app = express();
 app.disable("x-powered-by");
+// Stripe signs the raw webhook body, so that one route must skip JSON parsing.
+app.use("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 app.use(express.json({ limit: "100kb" }));
 
 const api = express.Router();
@@ -23,6 +25,7 @@ api.use(require("./routes/templates"));
 api.use(require("./routes/enrollments"));
 api.use(require("./routes/invoices"));
 api.use(require("./routes/reports"));
+api.use(require("./routes/stripe"));
 api.use(notFoundHandler);
 
 app.use("/api", api);

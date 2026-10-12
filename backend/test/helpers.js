@@ -21,6 +21,8 @@ function reseed() {
 
 const request = require("supertest");
 const app = require("../src/app");
+// Tests never call the real Stripe. stripe.test.js swaps in a fake client.
+require("../src/lib/stripe").setStripeForTests(null);
 const { prisma } = require("../src/db");
 const { todayISO, addDays, weekday } = require("../src/lib/dates");
 

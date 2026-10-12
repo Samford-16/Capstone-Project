@@ -64,17 +64,43 @@ expiry and any 3-digit CVC.
 
 `npm run db:reset` (in `backend/`) wipes the database, reruns migrations and reseeds.
 
+## Stripe payments (test mode)
+
+Families pay through **Stripe Checkout**: they're sent to Stripe's hosted payment
+page and come back to Current when they're done. Card numbers never touch our
+server. Without a Stripe key, the app uses its built-in demo checkout instead.
+
+1. Create a free account at **dashboard.stripe.com**. Stay in **test mode** (sandbox).
+2. **Developers → API keys** → copy the **Secret key** (`sk_test_...`).
+3. In `backend/.env` set `STRIPE_SECRET_KEY=sk_test_...` and restart the backend.
+   Live keys (`sk_live_...`) are refused on purpose.
+4. As a parent, go to **Billing → Pay now**. Pay with Stripe's test card
+   `4242 4242 4242 4242`, any future date, any CVC, any ZIP.
+5. You land back on Billing and the invoice shows **PAID**. The payment also
+   appears in the Stripe Dashboard under **Payments** (test data).
+
+Refunding a Stripe-paid invoice from **Invoices** sends the refund through Stripe
+to the same card. Other useful test cards: `4000 0000 0000 0002` (declined),
+`4000 0025 0000 3155` (asks for 3D Secure authentication).
+
+**Optional: webhook.** The app records the payment when the family returns to
+Billing. To also record it if they close the tab first, install the Stripe CLI and run
+`stripe listen --forward-to localhost:3000/api/stripe/webhook`, then put the
+`whsec_...` secret it prints into `STRIPE_WEBHOOK_SECRET`.
+
 ## Tests
 
 ```bash
 cd backend
-npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 25 API tests
+npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 33 API tests
 ```
 
 The tests cover each backend commitment: login and roles, coaches seeing only their own
 lessons, 8 simultaneous sign-ups for a 3-seat class (exactly 3 succeed), pricing by
 effective date, card validation, partial payments, refunds, voids, lesson cancellation,
-template application with coach-conflict rollback, and report totals.
+template application with coach-conflict rollback, report totals, and the Stripe
+flow against a fake Stripe (payment recorded exactly once, webhook signatures,
+refunds sent back through Stripe). The tests never contact the real Stripe.
 
 ## Production build
 
@@ -109,7 +135,6 @@ docs/
 
 ## Not built yet
 
-- Stripe sandbox (stretch goal). Only `backend/src/lib/cards.js` needs to change.
 - Attendance tracking (was in SwimSync; not in either proposal).
 - Email notifications and password reset.
 - Terms or seasons as a first-class concept. Lessons carry their own start and end dates.
