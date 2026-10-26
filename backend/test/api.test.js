@@ -329,13 +329,17 @@ describe("Bookkeeping", () => {
     const byStage = (await api(admin).get("/reports/summary?groupBy=stage")).body;
     const byMonth = (await api(admin).get("/reports/summary?groupBy=month")).body;
     assert.equal(byStage.rows.length, 5);
-    for (const k of ["invoicedCents", "collectedCents", "refundedCents", "outstandingCents"]) {
+    for (const k of ["invoicedCents", "creditedCents", "collectedCents", "refundedCents", "outstandingCents"]) {
       assert.equal(byStage.totals[k], byMonth.totals[k], `${k} should match across groupings`);
     }
     const dbInvoiced = await prisma.invoice.aggregate({ where: { status: { not: "VOID" } }, _sum: { amountCents: true } });
     assert.equal(byStage.totals.invoicedCents, dbInvoiced._sum.amountCents);
-    const unpaid = await prisma.invoice.findMany({ where: { status: "UNPAID" }, include: { payments: true } });
-    const owed = unpaid.reduce((s, i) => s + i.amountCents - i.payments.reduce((p, x) => p + (x.kind === "REFUND" ? -x.amountCents : x.amountCents), 0), 0);
+    const unpaid = await prisma.invoice.findMany({ where: { status: "UNPAID" }, include: { payments: true, credits: true } });
+    const owed = unpaid.reduce((s, i) => {
+      const credits = i.credits.filter((c) => !c.reversedAt).reduce((t, c) => t + c.amountCents, 0);
+      const paid = i.payments.reduce((p, x) => p + (x.kind === "REFUND" ? -x.amountCents : x.amountCents), 0);
+      return s + Math.max(i.amountCents - credits - paid, 0);
+    }, 0);
     assert.equal(byStage.totals.outstandingCents, owed, "only unpaid invoices count as outstanding");
   });
 });
@@ -448,5 +452,109 @@ describe("Scheduling", () => {
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.stageId, next);
     assert.equal((await api(coachMike).patch(`/swimmers/${sw.id}`).send({ firstName: "X" })).status, 403);
+  });
+});
+
+describe("Cancelled sessions (G4)", () => {
+  async function enrolledLesson(name) {
+    const lesson = await newLesson({ capacity: 5 });
+    const kid = await newChild(parent, name);
+    const enr = (await api(parent).post("/enrollments").send({ lessonId: lesson.id, swimmerId: kid.id })).body;
+    const detail = (await api(admin).get(`/lessons/${lesson.id}`)).body;
+    const future = detail.sessions.find((x) => x.date > todayISO());
+    return { lesson, enr, inv: enr.invoice, future };
+  }
+  const getInvoice = async (id) => (await api(admin).get(`/invoices/${id}`)).body;
+
+  it("credits families billed for a cancelled session, and restoring reverses it", async () => {
+    const { inv, future } = await enrolledLesson("Credit");
+    assert.equal(inv.sessionCount, 4);
+
+    const res = await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.creditsIssued, 1);
+    assert.equal(res.body.creditAmountCents, inv.ratePerSessionCents);
+
+    let now = await getInvoice(inv.id);
+    assert.equal(now.amountCents, inv.amountCents, "the issued invoice is never rewritten");
+    assert.equal(now.creditsCents, inv.ratePerSessionCents);
+    assert.equal(now.amountDueCents, inv.amountCents - inv.ratePerSessionCents);
+    assert.equal(now.balanceCents, inv.amountCents - inv.ratePerSessionCents);
+    assert.equal(now.credits[0].sessionDate, future.date);
+
+    // Cancelling the same date again does not credit twice.
+    assert.equal((await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true })).body.creditsIssued, 0);
+
+    const restore = await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: false });
+    assert.equal(restore.body.creditsReversed, 1);
+    now = await getInvoice(inv.id);
+    assert.equal(now.balanceCents, inv.amountCents, "the full amount is owed again");
+    assert.equal(now.credits.length, 1, "the reversed credit is kept for the record");
+    assert.ok(now.credits[0].reversedAt);
+    assert.equal(await prisma.invoiceCredit.count({ where: { invoiceId: inv.id } }), 1);
+  });
+
+  it("only credits families who were billed for that date", async () => {
+    const { lesson, inv, future } = await enrolledLesson("Early");
+    await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true });
+
+    // Enrolling while the date is cancelled: not billed for it, so never credited for it.
+    const late = await newChild(parent, "Late");
+    const lateInv = (await api(parent).post("/enrollments").send({ lessonId: lesson.id, swimmerId: late.id })).body.invoice;
+    assert.equal(lateInv.sessionCount, inv.sessionCount - 1);
+
+    await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: false });
+    const again = await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true });
+    assert.equal(again.body.creditsIssued, 1, "only the family that paid for the date");
+    assert.equal((await getInvoice(lateInv.id)).creditsCents, 0);
+    const early = await getInvoice(inv.id);
+    assert.equal(early.creditsCents, inv.ratePerSessionCents, "one live credit, after a cancel, restore and cancel");
+    assert.equal(early.credits.length, 2);
+  });
+
+  it("does not credit cancelled enrollments; their refund is handled separately", async () => {
+    const { enr, inv, future } = await enrolledLesson("Gone");
+    await api(parent).post(`/enrollments/${enr.id}/cancel`);
+    assert.equal((await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true })).body.creditsIssued, 0);
+    assert.equal((await prisma.invoice.findUnique({ where: { id: inv.id } })).status, "VOID");
+  });
+
+  it("turns a credit on a paid invoice into money owed back, refundable without unenrolling", async () => {
+    const { enr, inv, future } = await enrolledLesson("Paid");
+    await api(admin).post(`/invoices/${inv.id}/payments`).send({ amountCents: inv.amountCents, method: "CASH" });
+    await api(admin).patch(`/sessions/${future.id}`).send({ cancelled: true });
+
+    let now = await getInvoice(inv.id);
+    assert.equal(now.status, "PAID");
+    assert.equal(now.balanceCents, 0);
+    assert.equal(now.creditOwedCents, inv.ratePerSessionCents);
+
+    const tooMuch = await api(admin).post(`/invoices/${inv.id}/refund`).send({ amountCents: inv.ratePerSessionCents + 1 });
+    assert.equal(tooMuch.status, 409);
+    assert.equal(tooMuch.body.code, "ENROLLMENT_ACTIVE");
+
+    const res = await api(admin).post(`/invoices/${inv.id}/refund`).send({ amountCents: inv.ratePerSessionCents, method: "CASH", reason: "Pool closed" });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.status, "PAID");
+    assert.equal(res.body.creditOwedCents, 0);
+    assert.equal(res.body.enrollment.status, "ACTIVE", "the swimmer stays in the class");
+    assert.equal((await prisma.enrollment.findUnique({ where: { id: enr.id } })).status, "ACTIVE");
+  });
+
+  it("shows credits in the financial reports, consistently by stage and by month", async () => {
+    const today = todayISO();
+    const byStage = (await api(admin).get(`/reports/summary?from=${today}&to=${today}&groupBy=stage`)).body;
+    const byMonth = (await api(admin).get(`/reports/summary?from=${today}&to=${today}&groupBy=month`)).body;
+    assert.ok(byStage.totals.creditedCents > 0);
+    assert.equal(byStage.totals.creditedCents, byMonth.totals.creditedCents);
+    const live = await prisma.invoiceCredit.aggregate({ where: { reversedAt: null }, _sum: { amountCents: true } });
+    assert.equal(byStage.totals.creditedCents, live._sum.amountCents, "issued minus reversed today = live credits");
+    assert.equal(byStage.totals.netInvoicedCents, byStage.totals.invoicedCents - byStage.totals.creditedCents);
+  });
+
+  it("only lets admins cancel sessions", async () => {
+    const { future } = await enrolledLesson("Perm");
+    assert.equal((await api(coachMike).patch(`/sessions/${future.id}`).send({ cancelled: true })).status, 403);
+    assert.equal((await api(parent).patch(`/sessions/${future.id}`).send({ cancelled: true })).status, 403);
   });
 });

@@ -2,7 +2,7 @@ const express = require("express");
 const { prisma } = require("../db");
 const { authenticate, requireRole } = require("../middleware/auth");
 const { badRequest, conflict, forbidden, notFound, idParam } = require("../lib/http");
-const { netPaid, refreshInvoiceStatus, serializeInvoice, invoiceNumber, INVOICE_INCLUDE } = require("../lib/billing");
+const { netPaid, amountDue, refreshInvoiceStatus, serializeInvoice, invoiceNumber, INVOICE_INCLUDE } = require("../lib/billing");
 const { getStripe, stripeEnabled, callStripe, recordCheckoutSession } = require("../lib/stripe");
 const config = require("../config");
 const { chargeCard } = require("../lib/cards");
@@ -60,7 +60,7 @@ router.post("/invoices/:id/payments", async (req, res) => {
     await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
     const invoice = await loadInvoice(tx, invoiceId, req.user);
     if (invoice.status === "VOID") throw conflict("This invoice was voided.", "INVOICE_VOID");
-    const balance = invoice.amountCents - netPaid(invoice.payments);
+    const balance = amountDue(invoice) - netPaid(invoice.payments);
     if (balance <= 0) throw conflict("This invoice is already paid.", "ALREADY_PAID");
 
     if (req.user.role === "ADMIN") {
@@ -106,7 +106,7 @@ router.post("/invoices/:id/checkout", async (req, res) => {
   }
   const invoice = await loadInvoice(prisma, invoiceId, req.user);
   if (invoice.status === "VOID") throw conflict("This invoice was voided.", "INVOICE_VOID");
-  const balance = invoice.amountCents - netPaid(invoice.payments);
+  const balance = amountDue(invoice) - netPaid(invoice.payments);
   if (balance <= 0 || invoice.status !== "UNPAID") throw conflict("This invoice is already paid.", "ALREADY_PAID");
 
   const stripe = getStripe();
@@ -164,6 +164,10 @@ router.post("/invoices/:id/checkout/confirm", async (req, res) => {
  * enrollment must be cancelled in the same step: pass cancelEnrollment: true,
  * which also frees the seat. After any refund on a cancelled enrollment the
  * invoice is REFUNDED and nothing more is owed on it.
+ *
+ * The exception is a credit owed (G4): when a paid-for session is cancelled,
+ * the family has paid more than the invoice now asks for, and that difference
+ * can be refunded while the swimmer stays enrolled.
  */
 router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
   const invoiceId = idParam(req.params.id);
@@ -184,10 +188,15 @@ router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
     const amount = body.amountCents ?? paid;
     if (amount > paid) throw badRequest(`Refund is more than the $${(paid / 100).toFixed(2)} paid.`);
 
-    if (invoice.enrollment && invoice.enrollment.status === "ACTIVE") {
+    // Money paid for sessions that were later cancelled (G4) can go back
+    // without touching the enrollment. Anything beyond that cancels it (G5).
+    const creditOwed = Math.max(paid - amountDue(invoice), 0);
+    if (invoice.enrollment && invoice.enrollment.status === "ACTIVE" && amount > creditOwed) {
       if (!body.cancelEnrollment) {
         throw conflict(
-          "This swimmer is still enrolled. Refunding also cancels the enrollment, so confirm that to continue.",
+          creditOwed > 0
+            ? `This swimmer is still enrolled. Up to $${(creditOwed / 100).toFixed(2)} (cancelled sessions) can be refunded without cancelling; more than that also cancels the enrollment, so confirm that to continue.`
+            : "This swimmer is still enrolled. Refunding also cancels the enrollment, so confirm that to continue.",
           "ENROLLMENT_ACTIVE",
         );
       }

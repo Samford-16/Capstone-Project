@@ -11,6 +11,8 @@ User ─┬─< ParentSwimmer >─┬─ Swimmer ──< Enrollment >── Less
       │                   │                  │             │
       │  (SWIMMER role) ──┘ userId           │ 1:1         ├── Stage ──< StagePrice
       │                                   Invoice ──< Payment
+      │                                      ├──< InvoiceLine   >── LessonSession  (sessions billed)
+      │                                      └──< InvoiceCredit >── LessonSession  (cancelled-session credits)
       └─ coaches Lessons, is billed on Invoices, records Payments
 
 ScheduleTemplate ──< TemplateSlot        (applying a template creates Lessons)
@@ -28,6 +30,8 @@ ScheduleTemplate ──< TemplateSlot        (applying a template creates Lesson
 | **LessonSession** | One dated meeting of a lesson. | Unique per lesson and date. Can be cancelled individually. |
 | **Enrollment** | A swimmer in a lesson. | At most one ACTIVE per swimmer per lesson. Active count ≤ capacity. |
 | **Invoice** | One per enrollment. `sessionCount × ratePerSessionCents = amountCents`. | Never deleted. Status UNPAID, PAID, VOID or REFUNDED. |
+| **InvoiceLine** | One line per session an invoice billed, at the invoice's rate. | One per invoice and session. Tells a cancelled session who paid for it. |
+| **InvoiceCredit** | A credit for a billed session that was cancelled. Lowers the amount due. | Never deleted; restoring the session sets `reversedAt`. At most one live credit per invoice and session. |
 | **Payment** | Money in (PAYMENT) or out (REFUND), with method and reference. | Amount > 0. Refunds never exceed what was paid. |
 
 The CHECK constraints (capacity, prices, times, days, amounts) are in the first migration,
@@ -49,6 +53,10 @@ so the database rejects bad data even if the API had a bug.
    invoice is REFUNDED and nothing more is owed, even if part of the money was kept.
 6. **Cancel lesson** → every enrollment cancelled, unpaid invoices voided, paid ones flagged.
 7. **Price change** → only affects enrollments on or after the effective date.
+8. **Cancel one session** → every active enrollment billed for that date gets a credit for one session
+   at its invoice rate. Amount due = amount − live credits. If more was already paid than is now due,
+   the difference is owed to the family and can be refunded without cancelling the enrollment.
+   Restoring the session reverses the credits.
 
 ## Permissions matrix
 

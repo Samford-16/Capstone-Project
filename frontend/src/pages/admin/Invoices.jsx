@@ -99,13 +99,18 @@ export default function Invoices() {
                       {inv.enrollment?.swimmer?.name}
                       <div className="text-xs text-muted">{inv.enrollment?.lesson?.name}</div>
                     </td>
-                    <td className="text-right tabular-nums">{money(inv.amountCents)}</td>
+                    <td className="text-right tabular-nums">
+                      {money(inv.amountCents)}
+                      {inv.creditsCents > 0 && <div className="text-xs text-emerald-700">-{money(inv.creditsCents)} credit</div>}
+                    </td>
                     <td className="text-right tabular-nums">{money(inv.paidCents)}</td>
                     <td className="text-right font-semibold tabular-nums">{money(inv.balanceCents)}</td>
                     <td>
                       <StatusPill status={overdue ? "OVERDUE" : inv.status} label={overdue ? "overdue" : undefined} />
                       {needsRefundReview(inv) && (
-                        <div className="mt-1"><StatusPill status="OVERDUE" label="needs refund review" /></div>
+                        <div className="mt-1">
+                          <StatusPill status="OVERDUE" label={inv.creditOwedCents > 0 && inv.enrollment?.status === "ACTIVE" ? `owes family ${money(inv.creditOwedCents)}` : "needs refund review"} />
+                        </div>
                       )}
                     </td>
                     <td className="text-sm whitespace-nowrap">{shortDate(inv.dueDate)}</td>
@@ -148,9 +153,12 @@ export default function Invoices() {
   );
 }
 
-/** Paid money on a cancelled enrollment that has not been refunded yet. */
+/**
+ * Money to give back: paid on a cancelled enrollment and not refunded yet,
+ * or paid for sessions that were later cancelled (a credit owed, G4).
+ */
 function needsRefundReview(inv) {
-  return inv.enrollment?.status === "CANCELLED" && inv.paidCents > 0 && inv.status !== "REFUNDED";
+  return (inv.enrollment?.status === "CANCELLED" && inv.paidCents > 0 && inv.status !== "REFUNDED") || inv.creditOwedCents > 0;
 }
 
 /**
@@ -160,16 +168,19 @@ function needsRefundReview(inv) {
  * the enrollment and frees the seat, and the admin has to confirm that.
  */
 function RefundModal({ invoice, onClose, onDone }) {
-  const [amount, setAmount] = useState((invoice.paidCents / 100).toFixed(2));
+  const active = invoice.enrollment?.status === "ACTIVE";
+  // A credit owed (G4) can be refunded while the swimmer stays enrolled.
+  const creditOwed = active ? invoice.creditOwedCents || 0 : 0;
+  const [amount, setAmount] = useState(((creditOwed || invoice.paidCents) / 100).toFixed(2));
   const [method, setMethod] = useState("CASH");
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
-  const active = invoice.enrollment?.status === "ACTIVE";
   const paidByStripe = invoice.payments.some((p) => p.kind === "PAYMENT" && p.reference?.startsWith("pi_"));
   const cents = Math.round(Number(amount) * 100) || 0;
   const kept = invoice.paidCents - cents;
+  const cancels = active && cents > creditOwed;
 
   async function submit(e) {
     e.preventDefault();
@@ -180,9 +191,9 @@ function RefundModal({ invoice, onClose, onDone }) {
         amountCents: cents,
         method: paidByStripe ? undefined : method,
         reason: reason || undefined,
-        cancelEnrollment: active ? confirmCancel : undefined,
+        cancelEnrollment: cancels ? confirmCancel : undefined,
       });
-      onDone(updated, active);
+      onDone(updated, cancels);
     } catch (err) {
       setError(err);
     } finally {
@@ -195,12 +206,12 @@ function RefundModal({ invoice, onClose, onDone }) {
       open
       onClose={onClose}
       title={`Refund ${invoice.number}`}
-      footer={<><button className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary" form="refund-form" disabled={saving || (active && !confirmCancel)}>{saving ? "Refunding..." : `Refund ${money(cents)}`}</button></>}
+      footer={<><button className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary" form="refund-form" disabled={saving || (cancels && !confirmCancel)}>{saving ? "Refunding..." : `Refund ${money(cents)}`}</button></>}
     >
       <form id="refund-form" onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
         <p className="text-sm text-muted sm:col-span-2">
           {invoice.enrollment?.swimmer?.name}, {invoice.enrollment?.lesson?.name}. Paid: {money(invoice.paidCents)}.
-          {" "}Refund all of it, or part of it to keep payment for sessions already attended.
+          {creditOwed > 0 ? "" : " Refund all of it, or part of it to keep payment for sessions already attended."}
         </p>
         <Field label="Refund amount ($)">
           <input className="input" type="number" step="0.01" min="0.01" max={invoice.paidCents / 100} value={amount} onChange={(e) => setAmount(e.target.value)} required />
@@ -217,13 +228,21 @@ function RefundModal({ invoice, onClose, onDone }) {
           </Field>
         )}
         <div className="sm:col-span-2"><Field label="Reason (optional)"><input className="input" placeholder="Moved away, attended 2 classes" value={reason} onChange={(e) => setReason(e.target.value)} /></Field></div>
-        {kept > 0 && cents > 0 && (
+        {creditOwed > 0 && (
+          <p className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm sm:col-span-2">
+            {money(creditOwed)} was paid for sessions that were cancelled. Refunding up to that amount keeps {invoice.enrollment?.swimmer?.name || "the swimmer"} enrolled.
+          </p>
+        )}
+        {cancels && kept > 0 && cents > 0 && (
           <p className="text-sm sm:col-span-2">The school keeps {money(kept)}. The invoice will be marked refunded with nothing owed.</p>
         )}
-        {active && (
+        {cancels && (
           <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm sm:col-span-2">
             <input type="checkbox" className="mt-0.5" checked={confirmCancel} onChange={(e) => setConfirmCancel(e.target.checked)} />
-            <span>{invoice.enrollment?.swimmer?.name || "This swimmer"} is still enrolled. Refunding also cancels the enrollment and frees the seat.</span>
+            <span>
+              {invoice.enrollment?.swimmer?.name || "This swimmer"} is still enrolled.
+              {creditOwed > 0 ? ` Refunding more than ${money(creditOwed)}` : " Refunding"} also cancels the enrollment and frees the seat.
+            </span>
           </label>
         )}
         <div className="sm:col-span-2"><ErrorBanner error={error} /></div>

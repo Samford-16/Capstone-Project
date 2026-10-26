@@ -7,7 +7,7 @@ require("dotenv").config({ quiet: true });
 const bcrypt = require("bcryptjs");
 const { prisma } = require("../src/db");
 const { toDate, todayISO, addDays, weekday, datesForWeekday } = require("../src/lib/dates");
-const { rateForStage } = require("../src/lib/billing");
+const { rateForStage, addInvoiceLines } = require("../src/lib/billing");
 
 const PASSWORD = "Current123!";
 
@@ -41,7 +41,7 @@ function termDates() {
 async function main() {
   console.log("Clearing existing data...");
   await prisma.$executeRawUnsafe(
-    `TRUNCATE "Payment","Invoice","Enrollment","LessonSession","Lesson","TemplateSlot","ScheduleTemplate",
+    `TRUNCATE "InvoiceCredit","InvoiceLine","Payment","Invoice","Enrollment","LessonSession","Lesson","TemplateSlot","ScheduleTemplate",
      "StagePrice","ParentSwimmer","Swimmer","Stage","User" RESTART IDENTITY CASCADE`,
   );
 
@@ -118,11 +118,13 @@ async function main() {
   // Enroll through the same billing rules the API uses.
   const today = todayISO();
   async function enroll(swimmer, lesson, billedToId) {
-    const sessions = await prisma.lessonSession.count({
+    const billed = await prisma.lessonSession.findMany({
       where: { lessonId: lesson.id, cancelled: false, date: { gte: toDate(today) } },
+      select: { id: true },
     });
+    const sessions = billed.length;
     const rate = await rateForStage(prisma, lesson.stageId, today);
-    return prisma.enrollment.create({
+    const enrollment = await prisma.enrollment.create({
       data: {
         lessonId: lesson.id,
         swimmerId: swimmer.id,
@@ -136,6 +138,8 @@ async function main() {
       },
       include: { invoice: true },
     });
+    await addInvoiceLines(prisma, enrollment.invoice.id, billed.map((b) => b.id), rate);
+    return enrollment;
   }
 
   const e1 = await enroll(riley, lessons["Floaters"], jamie.id);

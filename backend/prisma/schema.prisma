@@ -65,6 +65,8 @@ model User {
   invoices         Invoice[]       @relation("BilledTo")
   paymentsRecorded Payment[]       @relation("RecordedBy")
   pricesSet        StagePrice[]    @relation("PriceSetBy")
+  creditsIssued    InvoiceCredit[] @relation("CreditIssuedBy")
+  creditsReversed  InvoiceCredit[] @relation("CreditReversedBy")
 }
 
 /// The person taking lessons. A swimmer either has their own login
@@ -191,7 +193,9 @@ model LessonSession {
   date      DateTime @db.Date
   cancelled Boolean  @default(false)
 
-  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  lesson       Lesson          @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  invoiceLines InvoiceLine[]
+  credits      InvoiceCredit[]
 
   @@unique([lessonId, date])
   @@index([date])
@@ -231,10 +235,12 @@ model Invoice {
   voidedAt            DateTime?
   note                String?
 
-  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
-  billedTo   User       @relation("BilledTo", fields: [billedToId], references: [id])
-  stage      Stage      @relation(fields: [stageId], references: [id])
+  enrollment Enrollment      @relation(fields: [enrollmentId], references: [id])
+  billedTo   User            @relation("BilledTo", fields: [billedToId], references: [id])
+  stage      Stage           @relation(fields: [stageId], references: [id])
   payments   Payment[]
+  lines      InvoiceLine[]
+  credits    InvoiceCredit[]
 
   @@index([billedToId])
   @@index([status])
@@ -256,4 +262,43 @@ model Payment {
   recordedBy User?   @relation("RecordedBy", fields: [recordedById], references: [id])
 
   @@index([receivedAt])
+}
+
+/// One line per session an invoice billed, at the invoice's rate. This is
+/// how a cancelled session knows which families paid for it (G4).
+model InvoiceLine {
+  id          Int @id @default(autoincrement())
+  invoiceId   Int
+  sessionId   Int
+  amountCents Int
+
+  invoice Invoice       @relation(fields: [invoiceId], references: [id])
+  session LessonSession @relation(fields: [sessionId], references: [id])
+
+  @@unique([invoiceId, sessionId])
+  @@index([sessionId])
+}
+
+/// A credit for a billed session that was cancelled (G4). It lowers what the
+/// invoice owes. Restoring the session reverses the credit (reversedAt is
+/// set); credits are never deleted, so the history stays auditable.
+model InvoiceCredit {
+  id           Int       @id @default(autoincrement())
+  invoiceId    Int
+  sessionId    Int
+  amountCents  Int
+  reason       String
+  createdAt    DateTime  @default(now())
+  createdById  Int?
+  reversedAt   DateTime?
+  reversedById Int?
+
+  invoice    Invoice       @relation(fields: [invoiceId], references: [id])
+  session    LessonSession @relation(fields: [sessionId], references: [id])
+  createdBy  User?         @relation("CreditIssuedBy", fields: [createdById], references: [id])
+  reversedBy User?         @relation("CreditReversedBy", fields: [reversedById], references: [id])
+
+  @@index([invoiceId])
+  @@index([sessionId])
+  @@index([createdAt])
 }

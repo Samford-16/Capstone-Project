@@ -298,10 +298,27 @@ paths:
     patch:
       tags: [Lessons]
       summary: Cancel or restore one session (pool closed). ADMIN.
+      description: >
+        Cancelling credits one session to every active enrollment whose invoice billed that date.
+        Restoring reverses those credits. The response reports how many were issued or reversed.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         content: { application/json: { schema: { type: object, properties: { cancelled: { type: boolean } } } } }
-      responses: { "200": { description: OK } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  date: { type: string, format: date }
+                  cancelled: { type: boolean }
+                  lessonId: { type: integer }
+                  creditsIssued: { type: integer }
+                  creditsReversed: { type: integer }
+                  creditAmountCents: { type: integer }
 
   /templates:
     get:
@@ -483,7 +500,8 @@ paths:
       description: >
         Partial refunds are allowed. Refunds are for cancelled enrollments: if the swimmer is still enrolled,
         pass `cancelEnrollment: true` to cancel the enrollment in the same step, otherwise the request fails
-        with ENROLLMENT_ACTIVE. After a refund on a cancelled enrollment the invoice is REFUNDED with nothing owed.
+        with ENROLLMENT_ACTIVE. The exception is the creditOwedCents of an active enrollment (money paid
+        for sessions later cancelled), which can be refunded without cancelling. After a refund on a cancelled enrollment the invoice is REFUNDED with nothing owed.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         content:
@@ -612,9 +630,13 @@ components:
         id: { type: integer }
         number: { type: string, example: INV-00012 }
         status: { type: string, enum: [UNPAID, PAID, VOID, REFUNDED] }
-        amountCents: { type: integer }
+        amountCents: { type: integer, description: As issued. Never changed. }
+        creditsCents: { type: integer, description: Live credits for cancelled sessions. }
+        amountDueCents: { type: integer, description: amountCents minus creditsCents. }
         paidCents: { type: integer }
         balanceCents: { type: integer }
+        creditOwedCents: { type: integer, description: Paid beyond the amount due; owed back to the family. }
+        credits: { type: array, items: { type: object } }
         sessionCount: { type: integer }
         ratePerSessionCents: { type: integer }
         issuedAt: { type: string, format: date-time }

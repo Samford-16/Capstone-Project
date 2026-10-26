@@ -11,6 +11,7 @@ const {
   LESSON_INCLUDE,
 } = require("../lib/lessons");
 const { todayISO, toDate, toISO, addDays, mondayOf } = require("../lib/dates");
+const { creditCancelledSession, reverseSessionCredits } = require("../lib/billing");
 const { z, isoDate, time, id, stageId, dayOfWeek, lessonFields } = require("../lib/schemas");
 
 const router = express.Router();
@@ -276,12 +277,41 @@ router.get("/sessions", async (req, res) => {
   );
 });
 
-// Cancel or restore a single meeting (pool closed, holiday).
+/**
+ * Cancel or restore a single meeting (pool closed, holiday).
+ * G4: cancelling credits every enrolled family that was billed for that date,
+ * so their invoice owes one session less (or the school owes them money if it
+ * was already paid). Restoring the date reverses those credits.
+ */
 router.patch("/sessions/:id", requireRole("ADMIN"), async (req, res) => {
   const sessionId = idParam(req.params.id);
   const body = z.object({ cancelled: z.boolean() }).parse(req.body);
-  const s = await prisma.lessonSession.update({ where: { id: sessionId }, data: body });
-  res.json({ id: s.id, date: toISO(s.date), cancelled: s.cancelled, lessonId: s.lessonId });
+
+  const result = await prisma.$transaction(
+    async (tx) => {
+      const existing = await tx.lessonSession.findUnique({ where: { id: sessionId } });
+      if (!existing) throw notFound("Session");
+      // Same lock as enrolling, so a family can't enroll halfway through the crediting.
+      await tx.$queryRaw`SELECT id FROM "Lesson" WHERE id = ${existing.lessonId} FOR UPDATE`;
+      const s = await tx.lessonSession.update({ where: { id: sessionId }, data: { cancelled: body.cancelled } });
+      if (body.cancelled === existing.cancelled) return { s, credits: { credited: 0, reversed: 0, amountCents: 0 } };
+      const credits = body.cancelled
+        ? await creditCancelledSession(tx, s, req.user.id)
+        : await reverseSessionCredits(tx, s, req.user.id);
+      return { s, credits };
+    },
+    { timeout: 20000 },
+  );
+  const { s, credits } = result;
+  res.json({
+    id: s.id,
+    date: toISO(s.date),
+    cancelled: s.cancelled,
+    lessonId: s.lessonId,
+    creditsIssued: credits.credited || 0,
+    creditsReversed: credits.reversed || 0,
+    creditAmountCents: credits.amountCents,
+  });
 });
 
 module.exports = router;

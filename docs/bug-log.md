@@ -1,13 +1,13 @@
 # Bug and Issue Log
 
 Everything found while building and testing Current. Update the Status column as items are fixed or tested.
-Last updated Oct 26, 2026 (G1, G2, G3, G5, G6, B7, S10 and the partial refund screen, all in the Oct 26 repo zip).
+Last updated Oct 26, 2026 (G1 to G6, B7, B8, S10, all in the Oct 26 repo zips; G4 auto-credit in the second one).
 
 Status key: **Open** (needs a fix), **Fixed, verify** (fix written, confirm on your PC), **Fixed** (confirmed working), **Decide** (needs a choice from Sami and William), **Backlog** (new feature, not a bug).
 
-**At a glance:** 8 bugs fixed (verify), 1 feature done (Stripe), 5 gaps fixed (verify), 1 gap still needs a decision (G4), 10 setup problems solved, 6 backlog ideas, 9 scenario steps left.
+**At a glance:** 8 bugs fixed (verify), 1 feature done (Stripe), 6 gaps fixed (verify), 10 setup problems solved, 6 backlog ideas, 9 scenario steps left.
 
-**Note on Oct 26:** G1, G3 and B7 were written on Oct 14 but never made it into the GitHub repo (the repo on Sami's Mac still had 33 tests and no week arrows). They are in the Oct 26 zip, along with everything else below. `npm test` in `backend` now runs 38 tests.
+**Note on Oct 26:** G1, G3 and B7 were written on Oct 14 but never made it into the GitHub repo (the repo on Sami's Mac still had 33 tests and no week arrows). They are in the Oct 26 zip, along with everything else below. `npm test` in `backend` now runs 44 tests.
 
 ---
 
@@ -37,8 +37,8 @@ Status key: **Open** (needs a fix), **Fixed, verify** (fix written, confirm on y
 | G1 | Swimmer stages | No screen for a coach or admin to change a swimmer's stage. | Fixed, verify: as Mike, open Stroke Builders; the roster has a "Stage placement" dropdown. Change one; "Noah Okafor is now Stage 4." appears |
 | G2 | Swimmer details | Parents couldn't fix a swimmer's name or birthday after adding them (for example "Mark Riveria"). | Fixed, verify: as a parent, My Family → Edit on a swimmer card; change the last name and save |
 | G3 | Week grid | After applying a template to future dates, the grid showed the current term **and** the future term side by side, names got cut off, and "Classes with openings" counted both terms (18 instead of 9). | Fixed, verify: Week and List views show one week with ← → arrows and dates on each column; future terms appear only in their own weeks |
-| G4 | Cancelled sessions | Cancelling one date (for example, Dec 1) lowers the price for **new** enrollments only. Families already enrolled were billed for every session and get no credit. | **Decide**: auto-credit, or document as a known limitation in William's paper |
-| G5 | Refunds | An admin could refund an **active** enrollment's invoice and the swimmer stayed enrolled with nothing paid. | Fixed, verify. **Default chosen, confirm with William:** refunding a swimmer who is still enrolled also cancels the enrollment, and the admin has to tick a box to confirm. See `decisions.md`, Oct 26 |
+| G4 | Cancelled sessions | Cancelling one date (for example, Dec 1) lowered the price for **new** enrollments only. Families already enrolled were billed for every session and got no credit. | Fixed, verify (decided Oct 26: auto-credit). As admin, open Floaters → Show all dates → Cancel a future date; the message says 1 family credited $55. Admin → Invoices shows INV-00001 with "-$55.00 credit" and "owes family $55.00"; Refund defaults to $55 with no cancel box. Restore the date and the credit is reversed |
+| G5 | Refunds | An admin could refund an **active** enrollment's invoice and the swimmer stayed enrolled with nothing paid. | Fixed, verify. **Default chosen, confirm with William:** refunding a swimmer who is still enrolled also cancels the enrollment, and the admin has to tick a box to confirm. Exception: a credit owed for cancelled sessions (G4) can be refunded without cancelling. See `decisions.md`, Oct 26 |
 | G6 | Dependencies | `npm install` in `frontend` reported 1 high severity vulnerability (Vite 8.3.0). The backend also had 7 (body-parser, zod, fast-uri and Prisma's dependencies). | Fixed, verify: `npm audit` shows 0 in both folders. Vite is now 8.3.5 and Prisma 7.10.1 |
 
 ## 4. Setup and repository problems (resolved; good material for the methodology section)

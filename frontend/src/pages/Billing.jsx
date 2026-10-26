@@ -58,7 +58,7 @@ export default function Billing() {
 
   return (
     <>
-      <PageHeader title="Billing" subtitle="Each enrollment creates one invoice: sessions remaining times the stage's price per session." />
+      <PageHeader title="Billing" subtitle="Each enrollment creates one invoice: sessions remaining times the stage's price per session. A cancelled session is credited back." />
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3">
         <StatTile label="Balance due" value={money(open.reduce((s, i) => s + i.balanceCents, 0))} sub={`${open.length} unpaid invoice(s)`} />
         <StatTile label="Paid" value={money(list.reduce((s, i) => s + Math.max(i.paidCents, 0), 0))} />
@@ -93,8 +93,14 @@ export default function Billing() {
                       <div className="text-xs text-muted">{inv.enrollment?.lesson?.name}</div>
                     </td>
                     <td className="text-sm tabular-nums">{inv.sessionCount} × {money(inv.ratePerSessionCents)}</td>
-                    <td className="text-right tabular-nums">{money(inv.amountCents)}</td>
-                    <td className="text-right font-semibold tabular-nums">{money(inv.balanceCents)}</td>
+                    <td className="text-right tabular-nums">
+                      {money(inv.amountCents)}
+                      {inv.creditsCents > 0 && <div className="text-xs text-emerald-700">-{money(inv.creditsCents)} credit</div>}
+                    </td>
+                    <td className="text-right font-semibold tabular-nums">
+                      {money(inv.balanceCents)}
+                      {inv.creditOwedCents > 0 && <div className="text-xs font-normal text-emerald-700">{money(inv.creditOwedCents)} back to you</div>}
+                    </td>
                     <td><StatusPill status={overdue ? "OVERDUE" : inv.status} label={overdue ? "overdue" : undefined} /></td>
                     <td className="text-sm whitespace-nowrap">{shortDate(inv.dueDate)}</td>
                     <td className="text-right whitespace-nowrap">
@@ -139,9 +145,34 @@ export function InvoiceDetail({ invoice: inv, onClose }) {
         {inv.billedTo && (<><dt className="text-muted">Billed to</dt><dd>{inv.billedTo.name}</dd></>)}
         <dt className="text-muted">Issued</dt><dd>{dateTime(inv.issuedAt)}</dd>
         <dt className="text-muted">Calculation</dt><dd>{inv.sessionCount} sessions × {money(inv.ratePerSessionCents)} = {money(inv.amountCents)}</dd>
+        {inv.creditsCents > 0 && (
+          <>
+            <dt className="text-muted">Credits</dt><dd>-{money(inv.creditsCents)} for cancelled sessions</dd>
+            <dt className="text-muted">Amount due</dt><dd className="font-semibold">{money(inv.amountDueCents)}</dd>
+          </>
+        )}
+        {inv.creditOwedCents > 0 && (<><dt className="text-muted">Owed to you</dt><dd className="text-emerald-700">{money(inv.creditOwedCents)}, to be refunded by the front desk</dd></>)}
         <dt className="text-muted">Status</dt><dd><StatusPill status={inv.status} /></dd>
         {inv.note && (<><dt className="text-muted">Note</dt><dd>{inv.note}</dd></>)}
       </dl>
+      {inv.credits?.length > 0 && (
+        <>
+          <h3 className="mt-5 mb-2 font-semibold">Session credits</h3>
+          <ul className="space-y-1.5 text-sm">
+            {inv.credits.map((c) => (
+              <li key={c.id} className={`flex justify-between gap-3 rounded-lg border border-line px-3 py-2 ${c.reversedAt ? "text-muted" : ""}`}>
+                <span>
+                  {c.sessionDate ? `${shortDate(c.sessionDate)} cancelled` : c.reason}
+                  <span className="block text-xs text-muted">
+                    {dateTime(c.createdAt)}{c.reversedAt ? ` · reversed ${dateTime(c.reversedAt)} (class back on)` : ""}
+                  </span>
+                </span>
+                <strong className={c.reversedAt ? "line-through" : "text-emerald-700"}>-{money(c.amountCents)}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <h3 className="mt-5 mb-2 font-semibold">Payments</h3>
       {inv.payments.length === 0 ? <p className="text-sm text-muted">None.</p> : (
         <ul className="space-y-1.5 text-sm">

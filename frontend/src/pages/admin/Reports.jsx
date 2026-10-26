@@ -7,6 +7,7 @@ import { money, todayISO } from "../../lib/format";
 const COLUMNS = [
   ["invoiceCount", "Invoices", (v) => v],
   ["invoicedCents", "Invoiced", money],
+  ["creditedCents", "Credited", money],
   ["collectedCents", "Collected", money],
   ["refundedCents", "Refunded", money],
   ["outstandingCents", "Outstanding", money],
@@ -20,11 +21,13 @@ export default function Reports() {
   const report = useApi(`/reports/summary${qs(params)}`);
   const set = (k) => (e) => setParams((p) => ({ ...p, [k]: e.target.value }));
   const t = report.data?.totals;
-  const maxInvoiced = Math.max(1, ...(report.data?.rows || []).map((r) => r.invoicedCents));
+  // Billed after session credits (G4): what families were actually asked for.
+  const net = (r) => r.invoicedCents - r.creditedCents;
+  const maxInvoiced = Math.max(1, ...(report.data?.rows || []).map(net));
 
   return (
     <>
-      <PageHeader title="Financial Reports" subtitle="Invoiced and outstanding are counted by invoice date. Collected and refunded are counted by the date money moved." />
+      <PageHeader title="Financial Reports" subtitle="Invoiced and outstanding are counted by invoice date. Credits for cancelled sessions by the date issued. Collected and refunded by the date money moved." />
       <div className="card mb-4 flex flex-wrap items-end gap-3 p-3">
         <label><span className="label">From</span><input className="input" type="date" value={params.from} onChange={set("from")} /></label>
         <label><span className="label">To</span><input className="input" type="date" value={params.to} onChange={set("to")} /></label>
@@ -41,10 +44,10 @@ export default function Reports() {
       {report.loading && !report.data ? <Spinner /> : t && (
         <>
           <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile label="Invoiced" value={money(t.invoicedCents)} sub={`${t.invoiceCount} invoice(s)`} />
+            <StatTile label="Invoiced" value={money(t.netInvoicedCents)} sub={t.creditedCents ? `${money(t.invoicedCents)} less ${money(t.creditedCents)} credits` : `${t.invoiceCount} invoice(s)`} />
             <StatTile label="Net collected" value={money(t.netCollectedCents)} sub={`${money(t.refundedCents)} refunded`} />
             <StatTile label="Outstanding" value={money(t.outstandingCents)} />
-            <StatTile label="Collection rate" value={t.invoicedCents ? `${Math.round(((t.invoicedCents - t.outstandingCents) / t.invoicedCents) * 100)}%` : "-"} sub="of invoiced amount" />
+            <StatTile label="Collection rate" value={t.netInvoicedCents > 0 ? `${Math.round(((t.netInvoicedCents - t.outstandingCents) / t.netInvoicedCents) * 100)}%` : "-"} sub="of invoiced amount, after credits" />
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -61,9 +64,9 @@ export default function Reports() {
                     <td className="font-medium whitespace-nowrap">{r.label}</td>
                     {COLUMNS.map(([k, , fmt]) => <td key={k} className="text-right tabular-nums">{fmt(r[k])}</td>)}
                     <td>
-                      <div className="flex h-2 overflow-hidden rounded-full bg-slate-100" style={{ width: `${(r.invoicedCents / maxInvoiced) * 100}%` }} title={`${money(r.invoicedCents - r.outstandingCents)} paid, ${money(r.outstandingCents)} owed`}>
-                        <div className="bg-emerald-500" style={{ width: `${r.invoicedCents ? ((r.invoicedCents - r.outstandingCents) / r.invoicedCents) * 100 : 0}%` }} />
-                        <div className="bg-amber-400" style={{ width: `${r.invoicedCents ? (r.outstandingCents / r.invoicedCents) * 100 : 0}%` }} />
+                      <div className="flex h-2 overflow-hidden rounded-full bg-slate-100" style={{ width: `${(Math.max(net(r), 0) / maxInvoiced) * 100}%` }} title={`${money(net(r) - r.outstandingCents)} paid, ${money(r.outstandingCents)} owed`}>
+                        <div className="bg-emerald-500" style={{ width: `${net(r) > 0 ? ((net(r) - r.outstandingCents) / net(r)) * 100 : 0}%` }} />
+                        <div className="bg-amber-400" style={{ width: `${net(r) > 0 ? (r.outstandingCents / net(r)) * 100 : 0}%` }} />
                       </div>
                     </td>
                   </tr>

@@ -4,7 +4,7 @@ const config = require("../config");
 const { authenticate, requireRole } = require("../middleware/auth");
 const { conflict, notFound, idParam } = require("../lib/http");
 const { visibleSwimmerIds, assertCanManageSwimmer, billingAccountFor } = require("../lib/access");
-const { rateForStage, serializeInvoice, INVOICE_INCLUDE } = require("../lib/billing");
+const { rateForStage, addInvoiceLines, serializeInvoice, INVOICE_INCLUDE } = require("../lib/billing");
 const { todayISO, toDate, toISO, addDays } = require("../lib/dates");
 const { z, id } = require("../lib/schemas");
 
@@ -92,7 +92,7 @@ router.post("/enrollments", requireRole("ADMIN", "PARENT", "SWIMMER"), async (re
       const sessions = await tx.lessonSession.findMany({
         where: { lessonId: lesson.id, cancelled: false, date: { gte: toDate(today) } },
         orderBy: { date: "asc" },
-        select: { date: true },
+        select: { id: true, date: true },
       });
       if (sessions.length === 0) throw conflict("There are no sessions left in this lesson.", "NO_SESSIONS_LEFT");
 
@@ -100,7 +100,7 @@ router.post("/enrollments", requireRole("ADMIN", "PARENT", "SWIMMER"), async (re
       const firstClass = toISO(sessions[0].date);
       const dueDate = firstClass > today ? firstClass : addDays(today, config.invoiceDueDays);
 
-      return tx.enrollment.create({
+      const created = await tx.enrollment.create({
         data: {
           lessonId: lesson.id,
           swimmerId: swimmer.id,
@@ -116,6 +116,12 @@ router.post("/enrollments", requireRole("ADMIN", "PARENT", "SWIMMER"), async (re
             },
           },
         },
+        include: { invoice: true },
+      });
+      // One line per billed session, so a later cancellation knows who to credit (G4).
+      await addInvoiceLines(tx, created.invoice.id, sessions.map((s) => s.id), rate);
+      return tx.enrollment.findUnique({
+        where: { id: created.id },
         include: { ...INCLUDE, invoice: { include: INVOICE_INCLUDE } },
       });
     },

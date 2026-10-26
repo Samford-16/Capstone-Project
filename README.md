@@ -39,6 +39,7 @@ cd backend
 cp .env.example .env          # set DATABASE_URL and JWT_SECRET
 npm install
 npx prisma migrate dev        # creates the tables
+npm run db:test:deploy        # same tables in the test database
 npm run db:seed               # demo data
 npm run dev                   # API on http://localhost:3000/api
 
@@ -95,8 +96,12 @@ Billing. To also record it if they close the tab first, install the Stripe CLI a
 
 ```bash
 cd backend
-npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 38 API tests
+npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 44 API tests
 ```
+
+After pulling a change that adds a migration (a new folder in `prisma/migrations`), run
+`npx prisma migrate deploy` for the app database and `npm run db:test:deploy` for the
+test database.
 
 The tests cover each backend commitment: login and roles, coaches seeing only their own
 lessons, 8 simultaneous sign-ups for a 3-seat class (exactly 3 succeed), pricing by

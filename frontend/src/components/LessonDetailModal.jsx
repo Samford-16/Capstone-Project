@@ -82,8 +82,20 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
   };
   const stageOptions = stages?.length ? stages : [1, 2, 3, 4, 5].map((id) => ({ id, name: `Stage ${id}` }));
 
-  const toggleSession = (s) =>
-    run(() => api.patch(`/sessions/${s.id}`, { cancelled: !s.cancelled }), s.cancelled ? "Session restored." : "Session cancelled.");
+  // G4: cancelling a date credits every family billed for it; restoring reverses that.
+  const toggleSession = (s) => {
+    const msg = s.cancelled
+      ? `Restore ${shortDate(s.date)}? Credits given for this date will be reversed, so those families owe for it again.`
+      : `Cancel ${shortDate(s.date)}? Every enrolled family that was billed for it gets a credit for one session.`;
+    if (!confirm(msg)) return;
+    run(
+      () => api.patch(`/sessions/${s.id}`, { cancelled: !s.cancelled }),
+      (r) =>
+        r.cancelled
+          ? `${shortDate(r.date)} cancelled.${r.creditsIssued ? ` ${r.creditsIssued} famil${r.creditsIssued === 1 ? "y" : "ies"} credited ${money(r.creditAmountCents)} in total.` : " No one was billed for it."}`
+          : `${shortDate(r.date)} restored.${r.creditsReversed ? ` ${r.creditsReversed} credit(s) reversed.` : ""}`,
+    );
+  };
 
   const today = todayISO();
 

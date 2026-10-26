@@ -5,10 +5,17 @@ Entries that were later replaced are marked **Superseded** and link to what repl
 
 ---
 
+## 2026-10-26: Cancelled sessions are credited automatically
+**Decision:** When an admin cancels one date of a lesson, every family with an active enrollment that was billed for that date gets a credit for one session at their invoice's rate. The issued invoice is never rewritten: the credit is its own record and lowers the amount due. On an unpaid invoice the balance drops. On a paid invoice the school now owes the family that money, the invoice is flagged "owes family", and an admin refunds it without touching the enrollment. Restoring the date reverses the credits (marked reversed, never deleted). To know who paid for which date, each invoice now has one line per billed session (InvoiceLine).
+**Why:** Bug log G4. Before this, cancelling a date only lowered the price for new enrollments, so families who had already enrolled paid for a class that didn't happen.
+**Tradeoff:** A family that enrolled while a date was cancelled was quoted a price without it. If that date is later restored, they are not charged for it; the quoted price is honoured.
+**Supersedes:** the "known limitation" option for G4.
+
 ## 2026-10-26: Refunds are for cancelled enrollments; partial refunds settle the invoice
 **Decision:** An admin can refund any amount up to what was paid. If the swimmer is still enrolled, the refund also cancels the enrollment and frees the seat, and the admin has to tick a box confirming that (the API returns ENROLLMENT_ACTIVE otherwise). After any refund on a cancelled enrollment the invoice is REFUNDED with nothing owed, even if the school kept part of the money for sessions already attended.
 **Why:** Bug log G5. Before this, refunding an active enrollment left the swimmer in the class with nothing paid, and a partial refund put the invoice back to UNPAID with the refunded amount owed again. Both are states a bookkeeper would have to fix by hand.
-**Tradeoff:** A goodwill credit for a student who stays enrolled can't be entered as a refund. That case belongs with G4 (credits for cancelled sessions), which is still open.
+**Exception (added with G4, same day):** money paid for sessions that were later cancelled (a credit owed) can be refunded while the swimmer stays enrolled. Only a refund beyond that amount cancels the enrollment.
+**Tradeoff:** Any other goodwill refund for a student who stays enrolled can't be entered as a refund.
 **Note:** This is a default chosen while fixing G5. Sami and William should confirm it; changing it is limited to the refund route in `backend/src/routes/invoices.js` and `statusFor` in `backend/src/lib/billing.js`.
 
 ## 2026-10-26: The schedule shows one week at a time
