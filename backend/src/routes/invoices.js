@@ -6,7 +6,7 @@ const { netPaid, refreshInvoiceStatus, serializeInvoice, invoiceNumber, INVOICE_
 const { getStripe, stripeEnabled, callStripe, recordCheckoutSession } = require("../lib/stripe");
 const config = require("../config");
 const { chargeCard } = require("../lib/cards");
-const { toDate, addDays } = require("../lib/dates");
+const { dayRange } = require("../lib/dates");
 const { z, isoDate, stageId } = require("../lib/schemas");
 
 const router = express.Router();
@@ -35,7 +35,7 @@ router.get("/invoices", async (req, res) => {
       billedToId: req.user.role === "ADMIN" ? undefined : req.user.id,
       status: q.status,
       stageId: q.stageId,
-      issuedAt: q.from || q.to ? { gte: q.from ? toDate(q.from) : undefined, lt: q.to ? toDate(addDays(q.to, 1)) : undefined } : undefined,
+      issuedAt: q.from || q.to ? dayRange(q.from, q.to) : undefined,
     },
     include: INVOICE_INCLUDE,
     orderBy: { issuedAt: "desc" },
@@ -156,7 +156,15 @@ router.post("/invoices/:id/checkout/confirm", async (req, res) => {
   });
 });
 
-// Admin: give money back, up to what was paid.
+/**
+ * Admin: give money back, up to what was paid. Any amount (a partial refund is fine).
+ *
+ * Refunds are for enrollments that are cancelled (G5). Refunding a swimmer who
+ * stays in the class would leave them enrolled with nothing paid, so an active
+ * enrollment must be cancelled in the same step: pass cancelEnrollment: true,
+ * which also frees the seat. After any refund on a cancelled enrollment the
+ * invoice is REFUNDED and nothing more is owed on it.
+ */
 router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
   const invoiceId = idParam(req.params.id);
   const body = z
@@ -164,6 +172,7 @@ router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
       amountCents: z.coerce.number().int().positive().optional(),
       method: z.enum(["CASH", "CHECK", "CARD"]).optional(),
       reason: z.string().trim().max(200).optional(),
+      cancelEnrollment: z.boolean().optional(),
     })
     .parse(req.body || {});
 
@@ -174,6 +183,19 @@ router.post("/invoices/:id/refund", requireRole("ADMIN"), async (req, res) => {
     if (paid <= 0) throw conflict("Nothing has been paid on this invoice.", "NOTHING_TO_REFUND");
     const amount = body.amountCents ?? paid;
     if (amount > paid) throw badRequest(`Refund is more than the $${(paid / 100).toFixed(2)} paid.`);
+
+    if (invoice.enrollment && invoice.enrollment.status === "ACTIVE") {
+      if (!body.cancelEnrollment) {
+        throw conflict(
+          "This swimmer is still enrolled. Refunding also cancels the enrollment, so confirm that to continue.",
+          "ENROLLMENT_ACTIVE",
+        );
+      }
+      await tx.enrollment.update({
+        where: { id: invoice.enrollment.id },
+        data: { status: "CANCELLED", cancelledAt: new Date() },
+      });
+    }
     const lastPayment = [...invoice.payments].reverse().find((p) => p.kind === "PAYMENT");
     let method = body.method || lastPayment.method;
     let reference = body.reason || null;

@@ -53,6 +53,19 @@ export function addDays(iso, n) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Monday of the week containing iso. The schedule grid starts on Monday. */
+export function mondayOf(iso) {
+  const dow = new Date(`${iso}T12:00:00`).getDay();
+  return addDays(iso, -((dow + 6) % 7));
+}
+
+/** "Oct 26 to Nov 1, 2026" for the week starting on a Monday. */
+export function weekLabel(mondayIso) {
+  const end = addDays(mondayIso, 6);
+  const fmt = (iso, opts) => new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", opts);
+  return `${fmt(mondayIso, { month: "short", day: "numeric" })} to ${fmt(end, { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
 export function ageFrom(dobIso) {
   if (!dobIso) return null;
   const dob = new Date(`${dobIso}T12:00:00`);

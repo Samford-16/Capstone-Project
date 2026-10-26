@@ -46,6 +46,53 @@ function datesForWeekday(startIso, endIso, dayOfWeek) {
   return out;
 }
 
+/** Minutes the school's time zone is ahead of UTC at a given instant (New York: -240 or -300). */
+function tzOffsetMinutes(instant) {
+  const parts = {};
+  for (const p of new Intl.DateTimeFormat("en-US", {
+    timeZone: config.timezone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant)) {
+    parts[p.type] = p.value;
+  }
+  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return Math.round((asUTC - instant.getTime()) / 60000);
+}
+
+/**
+ * The exact instant a calendar day starts at the school (midnight in New York),
+ * for filtering timestamps such as Invoice.issuedAt and Payment.receivedAt.
+ * toDate() gives UTC midnight, which is 8 PM the evening before in New York,
+ * so it is only right for @db.Date columns. (Bug B7.)
+ */
+function startOfDay(iso) {
+  const utcMidnight = toDate(iso).getTime();
+  let instant = new Date(utcMidnight - tzOffsetMinutes(new Date(utcMidnight)) * 60000);
+  // Re-check in case a daylight saving change falls between the two instants.
+  const offset = tzOffsetMinutes(instant);
+  instant = new Date(utcMidnight - offset * 60000);
+  return instant;
+}
+
+/** { gte, lt } covering whole school days from..to, for timestamp columns. */
+function dayRange(fromIso, toIso) {
+  return {
+    gte: fromIso ? startOfDay(fromIso) : undefined,
+    lt: toIso ? startOfDay(addDays(toIso, 1)) : undefined,
+  };
+}
+
+/** Monday of the week containing iso (the schedule grid starts on Monday). */
+function mondayOf(iso) {
+  return addDays(iso, -((weekday(iso) + 6) % 7));
+}
+
 function fmtTime12(hhmm) {
   const [h, m] = hhmm.split(":").map(Number);
   return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
@@ -61,5 +108,8 @@ module.exports = {
   weekday,
   addDays,
   datesForWeekday,
+  startOfDay,
+  dayRange,
+  mondayOf,
   fmtTime12,
 };

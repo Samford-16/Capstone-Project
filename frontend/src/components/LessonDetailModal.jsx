@@ -70,6 +70,18 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
     run(() => api.del(`/lessons/${lessonId}`), "Lesson deleted.").then(() => onClose());
   };
 
+  // G1: staff place swimmers in a stage after assessing them. The server allows
+  // admins (any swimmer) and the lesson's coach (swimmers in their lessons).
+  const changeStage = (r, value) => {
+    const stageId = value ? Number(value) : null;
+    if (stageId === r.swimmer.stageId) return;
+    run(
+      () => api.patch(`/swimmers/${r.swimmer.id}`, { stageId }),
+      (s) => (s.stageId ? `${s.name} is now Stage ${s.stageId}.` : `${s.name} has no stage set.`),
+    );
+  };
+  const stageOptions = stages?.length ? stages : [1, 2, 3, 4, 5].map((id) => ({ id, name: `Stage ${id}` }));
+
   const toggleSession = (s) =>
     run(() => api.patch(`/sessions/${s.id}`, { cancelled: !s.cancelled }), s.cancelled ? "Session restored." : "Session cancelled.");
 
@@ -185,7 +197,7 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
                       <tr>
                         <th>Swimmer</th>
                         <th>Age</th>
-                        <th>Placed</th>
+                        <th>Stage placement</th>
                         <th>Contact</th>
                         {isAdmin && <th>Invoice</th>}
                       </tr>
@@ -195,7 +207,20 @@ export default function LessonDetailModal({ lessonId, onClose, onChanged, coache
                         <tr key={r.enrollmentId}>
                           <td className="font-medium">{r.swimmer.name}</td>
                           <td>{ageFrom(r.swimmer.dateOfBirth) ?? "-"}</td>
-                          <td>{r.swimmer.stageId ? <StageTag stage={stages?.find((s) => s.id === r.swimmer.stageId) || r.swimmer.stageId} size="xs" /> : "-"}</td>
+                          <td>
+                            <label className="sr-only" htmlFor={`stage-${r.enrollmentId}`}>Stage placement for {r.swimmer.name}</label>
+                            <select
+                              id={`stage-${r.enrollmentId}`}
+                              className={`input py-1 text-xs ${r.swimmer.stageId && r.swimmer.stageId !== lesson.stage.id ? "border-amber-500" : ""}`}
+                              value={r.swimmer.stageId ?? ""}
+                              disabled={busy}
+                              onChange={(e) => changeStage(r, e.target.value)}
+                              title={r.swimmer.stageId && r.swimmer.stageId !== lesson.stage.id ? "Placed in a different stage than this class" : undefined}
+                            >
+                              <option value="">Not set</option>
+                              {stageOptions.map((st) => <option key={st.id} value={st.id}>Stage {st.id}</option>)}
+                            </select>
+                          </td>
                           <td className="text-xs">
                             {r.contacts.length ? r.contacts.map((c) => <div key={c.email}>{c.name} · {c.phone || c.email}</div>) : "Own account"}
                           </td>

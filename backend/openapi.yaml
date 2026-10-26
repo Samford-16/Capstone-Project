@@ -222,6 +222,10 @@ paths:
         - { name: availability, in: query, schema: { type: string, enum: [open, full] } }
         - { name: enrolled, in: query, description: "Families: lessons their swimmers are (not) in. Staff: lessons with (no) enrollments.", schema: { type: string, enum: ["true", "false"] } }
         - { name: includePast, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - name: weekOf
+          in: query
+          description: Any date in a week (YYYY-MM-DD). Returns only lessons that meet that Monday-to-Sunday week, each with `weekDate`, the date it meets. Overrides includePast.
+          schema: { type: string, format: date }
         - { name: sort, in: query, schema: { type: string, enum: [time, stage, coach, spots], default: time } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Lesson" } } } } }
@@ -476,14 +480,22 @@ paths:
     post:
       tags: [Invoices]
       summary: Refund up to the amount paid (default all). ADMIN. Stripe card payments are refunded through Stripe.
+      description: >
+        Partial refunds are allowed. Refunds are for cancelled enrollments: if the swimmer is still enrolled,
+        pass `cancelEnrollment: true` to cancel the enrollment in the same step, otherwise the request fails
+        with ENROLLMENT_ACTIVE. After a refund on a cancelled enrollment the invoice is REFUNDED with nothing owed.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              properties: { amountCents: { type: integer }, method: { type: string }, reason: { type: string } }
-      responses: { "200": { description: OK }, "409": { description: NOTHING_TO_REFUND } }
+              properties:
+                amountCents: { type: integer }
+                method: { type: string, enum: [CASH, CHECK, CARD] }
+                reason: { type: string }
+                cancelEnrollment: { type: boolean }
+      responses: { "200": { description: OK }, "400": { description: More than was paid }, "409": { description: "NOTHING_TO_REFUND or ENROLLMENT_ACTIVE" } }
 
   /invoices/{id}/void:
     post:

@@ -185,7 +185,7 @@ describe("Stripe Checkout", () => {
     await api(parent).post(`/invoices/${inv.id}/checkout/confirm`).send({ sessionId });
 
     const before = refunds.length;
-    const res = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away" });
+    const res = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away", cancelEnrollment: true });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.status, "REFUNDED");
     assert.equal(refunds.length, before + 1);

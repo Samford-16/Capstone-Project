@@ -16,10 +16,11 @@ export default function Invoices() {
   const invoices = useApi(`/invoices${qs(filters)}`);
   const [recording, setRecording] = useState(null);
   const [viewing, setViewing] = useState(null);
+  const [refunding, setRefunding] = useState(null);
   const today = todayISO();
 
   const list = (invoices.data || []).filter((i) => {
-    if (needsRefund && !(i.enrollment?.status === "CANCELLED" && i.paidCents > 0)) return false;
+    if (needsRefund && !needsRefundReview(i)) return false;
     if (!search) return true;
     const hay = `${i.number} ${i.billedTo?.name} ${i.enrollment?.swimmer?.name} ${i.enrollment?.lesson?.name}`.toLowerCase();
     return hay.includes(search.toLowerCase());
@@ -34,10 +35,6 @@ export default function Invoices() {
       toast(err.message, "error");
     }
   }
-  const refund = (inv) => {
-    if (!confirm(`Refund ${money(inv.paidCents)} on ${inv.number}?`)) return;
-    act(() => api.post(`/invoices/${inv.id}/refund`, {}), `${inv.number} refunded.`);
-  };
   const voidInv = (inv) => {
     const reason = prompt(`Void ${inv.number}? Reason (optional):`);
     if (reason === null) return;
@@ -107,14 +104,14 @@ export default function Invoices() {
                     <td className="text-right font-semibold tabular-nums">{money(inv.balanceCents)}</td>
                     <td>
                       <StatusPill status={overdue ? "OVERDUE" : inv.status} label={overdue ? "overdue" : undefined} />
-                      {inv.enrollment?.status === "CANCELLED" && inv.paidCents > 0 && (
+                      {needsRefundReview(inv) && (
                         <div className="mt-1"><StatusPill status="OVERDUE" label="needs refund review" /></div>
                       )}
                     </td>
                     <td className="text-sm whitespace-nowrap">{shortDate(inv.dueDate)}</td>
                     <td className="text-right whitespace-nowrap">
                       {inv.status === "UNPAID" && <button className="btn-primary btn-sm" onClick={() => setRecording(inv)}>Record payment</button>}
-                      {inv.paidCents > 0 && <button className="btn-ghost btn-sm" onClick={() => refund(inv)}>Refund</button>}
+                      {inv.paidCents > 0 && inv.status !== "REFUNDED" && <button className="btn-ghost btn-sm" onClick={() => setRefunding(inv)}>Refund</button>}
                       {inv.status === "UNPAID" && inv.payments.length === 0 && <button className="btn-ghost btn-sm text-red-700" onClick={() => voidInv(inv)}>Void</button>}
                     </td>
                   </tr>
@@ -136,7 +133,102 @@ export default function Invoices() {
         />
       )}
       {viewing && <InvoiceDetail invoice={viewing} onClose={() => setViewing(null)} />}
+      {refunding && (
+        <RefundModal
+          invoice={refunding}
+          onClose={() => setRefunding(null)}
+          onDone={(updated, cancelled) => {
+            setRefunding(null);
+            toast(`${updated.number}: refunded ${money(refunding.paidCents - updated.paidCents)}${cancelled ? ` and ${refunding.enrollment?.swimmer?.name || "the swimmer"}'s enrollment was cancelled` : ""}.`);
+            invoices.reload();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/** Paid money on a cancelled enrollment that has not been refunded yet. */
+function needsRefundReview(inv) {
+  return inv.enrollment?.status === "CANCELLED" && inv.paidCents > 0 && inv.status !== "REFUNDED";
+}
+
+/**
+ * Refund any amount up to what was paid. A partial refund is for keeping
+ * payment for sessions already attended. Refunds are only for cancelled
+ * enrollments (G5): refunding a swimmer who is still enrolled also cancels
+ * the enrollment and frees the seat, and the admin has to confirm that.
+ */
+function RefundModal({ invoice, onClose, onDone }) {
+  const [amount, setAmount] = useState((invoice.paidCents / 100).toFixed(2));
+  const [method, setMethod] = useState("CASH");
+  const [reason, setReason] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const active = invoice.enrollment?.status === "ACTIVE";
+  const paidByStripe = invoice.payments.some((p) => p.kind === "PAYMENT" && p.reference?.startsWith("pi_"));
+  const cents = Math.round(Number(amount) * 100) || 0;
+  const kept = invoice.paidCents - cents;
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await api.post(`/invoices/${invoice.id}/refund`, {
+        amountCents: cents,
+        method: paidByStripe ? undefined : method,
+        reason: reason || undefined,
+        cancelEnrollment: active ? confirmCancel : undefined,
+      });
+      onDone(updated, active);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Refund ${invoice.number}`}
+      footer={<><button className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary" form="refund-form" disabled={saving || (active && !confirmCancel)}>{saving ? "Refunding..." : `Refund ${money(cents)}`}</button></>}
+    >
+      <form id="refund-form" onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+        <p className="text-sm text-muted sm:col-span-2">
+          {invoice.enrollment?.swimmer?.name}, {invoice.enrollment?.lesson?.name}. Paid: {money(invoice.paidCents)}.
+          {" "}Refund all of it, or part of it to keep payment for sessions already attended.
+        </p>
+        <Field label="Refund amount ($)">
+          <input className="input" type="number" step="0.01" min="0.01" max={invoice.paidCents / 100} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+        </Field>
+        {paidByStripe ? (
+          <p className="self-end pb-2 text-xs text-muted">Paid online, so the refund goes back to the same card through Stripe.</p>
+        ) : (
+          <Field label="Refunded by">
+            <select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="CASH">Cash</option>
+              <option value="CHECK">Check</option>
+              <option value="CARD">Card (at desk)</option>
+            </select>
+          </Field>
+        )}
+        <div className="sm:col-span-2"><Field label="Reason (optional)"><input className="input" placeholder="Moved away, attended 2 classes" value={reason} onChange={(e) => setReason(e.target.value)} /></Field></div>
+        {kept > 0 && cents > 0 && (
+          <p className="text-sm sm:col-span-2">The school keeps {money(kept)}. The invoice will be marked refunded with nothing owed.</p>
+        )}
+        {active && (
+          <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm sm:col-span-2">
+            <input type="checkbox" className="mt-0.5" checked={confirmCancel} onChange={(e) => setConfirmCancel(e.target.checked)} />
+            <span>{invoice.enrollment?.swimmer?.name || "This swimmer"} is still enrolled. Refunding also cancels the enrollment and frees the seat.</span>
+          </label>
+        )}
+        <div className="sm:col-span-2"><ErrorBanner error={error} /></div>
+      </form>
+    </Modal>
   );
 }
 

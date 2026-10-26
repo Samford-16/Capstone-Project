@@ -10,7 +10,7 @@ const {
   decorateLessons,
   LESSON_INCLUDE,
 } = require("../lib/lessons");
-const { todayISO, toDate, toISO } = require("../lib/dates");
+const { todayISO, toDate, toISO, addDays, mondayOf } = require("../lib/dates");
 const { z, isoDate, time, id, stageId, dayOfWeek, lessonFields } = require("../lib/schemas");
 
 const router = express.Router();
@@ -41,17 +41,23 @@ router.get("/lessons", async (req, res) => {
       availability: z.enum(["open", "full"]).optional(),
       enrolled: z.enum(["true", "false"]).optional(),
       includePast: z.enum(["true", "false"]).optional(),
+      // Any date in the week to show (G3). Only lessons that actually meet that week are returned.
+      weekOf: isoDate.optional(),
       sort: z.enum(["time", "stage", "coach", "spots"]).default("time"),
     })
     .parse(req.query);
 
   const today = todayISO();
+  const weekStart = q.weekOf ? mondayOf(q.weekOf) : null;
+  const weekEnd = weekStart ? addDays(weekStart, 6) : null;
   const where = {
     stageId: q.stageId,
     dayOfWeek: q.dayOfWeek,
     coachId: req.user.role === "COACH" ? req.user.id : q.coachId,
     status: q.status === "ALL" ? undefined : q.status,
-    endDate: q.includePast === "true" ? undefined : { gte: toDate(today) },
+    ...(weekStart
+      ? { startDate: { lte: toDate(weekEnd) }, endDate: { gte: toDate(weekStart) } }
+      : { endDate: q.includePast === "true" ? undefined : { gte: toDate(today) } }),
   };
   const lessons = await prisma.lesson.findMany({
     where,
@@ -59,8 +65,19 @@ router.get("/lessons", async (req, res) => {
     orderBy: [{ dayOfWeek: "asc" }, { startTime: "asc" }],
   });
 
+  // A lesson overlapping the week may still not meet in it (it starts on Friday
+  // but meets Mondays), so keep only those whose meeting day falls inside its dates.
+  const meetsThisWeek = (l) => {
+    const date = addDays(weekStart, (l.dayOfWeek + 6) % 7);
+    return date >= toISO(l.startDate) && date <= toISO(l.endDate);
+  };
+  const inWeek = weekStart ? lessons.filter(meetsThisWeek) : lessons;
+
   const mySwimmerIds = await familySwimmerIds(req.user);
-  let rows = await decorateLessons(prisma, lessons, { mySwimmerIds });
+  let rows = await decorateLessons(prisma, inWeek, { mySwimmerIds });
+  if (weekStart) {
+    for (const l of rows) l.weekDate = addDays(weekStart, (l.dayOfWeek + 6) % 7);
+  }
 
   if (q.availability === "open") rows = rows.filter((l) => !l.isFull);
   if (q.availability === "full") rows = rows.filter((l) => l.isFull);

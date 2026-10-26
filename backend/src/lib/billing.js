@@ -37,10 +37,18 @@ function netPaid(payments) {
   return payments.reduce((sum, p) => sum + (p.kind === "REFUND" ? -p.amountCents : p.amountCents), 0);
 }
 
-function statusFor(invoice, payments) {
+/**
+ * An invoice's status from its payments.
+ * A refund on a cancelled enrollment settles the invoice (REFUNDED, nothing
+ * owed), even when only part of the money went back, for example when the
+ * school keeps payment for sessions already attended. Without that rule a
+ * partial refund would put the invoice back to UNPAID with a balance owed.
+ */
+function statusFor(invoice, payments, enrollmentStatus) {
   if (invoice.status === "VOID") return "VOID";
   const paid = netPaid(payments);
   const refunded = payments.some((p) => p.kind === "REFUND");
+  if (refunded && enrollmentStatus === "CANCELLED") return "REFUNDED";
   if (paid >= invoice.amountCents) return "PAID";
   if (paid <= 0 && refunded) return "REFUNDED";
   return "UNPAID";
@@ -48,8 +56,11 @@ function statusFor(invoice, payments) {
 
 /** Recalculate and save an invoice's status from its payments. */
 async function refreshInvoiceStatus(tx, invoiceId) {
-  const invoice = await tx.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
-  const status = statusFor(invoice, invoice.payments);
+  const invoice = await tx.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { payments: true, enrollment: { select: { status: true } } },
+  });
+  const status = statusFor(invoice, invoice.payments, invoice.enrollment?.status);
   if (status !== invoice.status) {
     await tx.invoice.update({ where: { id: invoiceId }, data: { status } });
   }

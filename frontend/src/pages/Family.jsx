@@ -17,6 +17,7 @@ export default function Family() {
   const enrollments = useApi("/enrollments");
   const { data: stages } = useApi("/stages");
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   async function cancel(e) {
     if (!confirm(`Cancel ${e.swimmer.name}'s enrollment in ${e.lesson.name}?`)) return;
@@ -59,11 +60,14 @@ export default function Family() {
                   <div className="mt-2 text-sm text-muted">
                     {s.activeEnrollments.length ? `In ${s.activeEnrollments.map((e) => e.lessonName).join(", ")}` : "Not enrolled in any classes"}
                   </div>
-                  {s.stageId && (
-                    <Link to="/schedule" className="mt-2 inline-block text-sm font-medium text-primary">
-                      Find a Stage {s.stageId} class →
-                    </Link>
-                  )}
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    {s.stageId ? (
+                      <Link to="/schedule" className="text-sm font-medium text-primary">
+                        Find a Stage {s.stageId} class →
+                      </Link>
+                    ) : <span />}
+                    <button className="btn-ghost btn-sm" onClick={() => setEditing(s)}>Edit</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -116,6 +120,19 @@ export default function Family() {
         )}
       </section>
 
+      {editing && (
+        <EditSwimmerModal
+          swimmer={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async (s) => {
+            setEditing(null);
+            toast(`${s.name} was updated.`);
+            swimmers.reload();
+            enrollments.reload();
+            await refresh();
+          }}
+        />
+      )}
       {adding && (
         <AddSwimmerModal
           stages={stages || []}
@@ -158,6 +175,51 @@ function AddSwimmerModal({ stages, onClose, onSaved }) {
             {stages.map((s) => <option key={s.id} value={s.id}>Stage {s.id}: {s.name}</option>)}
           </select>
         </Field>
+        <div className="sm:col-span-2"><ErrorBanner error={error} /></div>
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * G2: parents fix a child's name or birthday. Stage is not editable here
+ * because placement is the coach's assessment (the server enforces this too).
+ */
+function EditSwimmerModal({ swimmer, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    firstName: swimmer.firstName,
+    lastName: swimmer.lastName,
+    dateOfBirth: swimmer.dateOfBirth || "",
+  });
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      onSaved(await api.patch(`/swimmers/${swimmer.id}`, { ...form, dateOfBirth: form.dateOfBirth || null }));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Edit ${swimmer.name}`}
+      footer={<><button className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary" form="edit-swimmer" disabled={saving}>{saving ? "Saving..." : "Save changes"}</button></>}
+    >
+      <form id="edit-swimmer" onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+        <Field label="First name"><input className="input" value={form.firstName} onChange={set("firstName")} required /></Field>
+        <Field label="Last name"><input className="input" value={form.lastName} onChange={set("lastName")} required /></Field>
+        <Field label="Date of birth"><input className="input" type="date" value={form.dateOfBirth} onChange={set("dateOfBirth")} /></Field>
+        <p className="self-end pb-2 text-xs text-muted">Stage placement is changed by your coach.</p>
         <div className="sm:col-span-2"><ErrorBanner error={error} /></div>
       </form>
     </Modal>

@@ -9,7 +9,7 @@ const { prisma } = require("../db");
 const { authenticate, requireRole } = require("../middleware/auth");
 const { badRequest } = require("../lib/http");
 const { netPaid } = require("../lib/billing");
-const { toDate, addDays, todayISO } = require("../lib/dates");
+const { toDate, todayISO, dayRange, startOfDay } = require("../lib/dates");
 const { z, isoDate } = require("../lib/schemas");
 const config = require("../config");
 
@@ -30,7 +30,8 @@ router.get("/reports/summary", async (req, res) => {
     })
     .parse(req.query);
   if (q.to < q.from) throw badRequest("'to' must be on or after 'from'.");
-  const range = { gte: toDate(q.from), lt: toDate(addDays(q.to, 1)) };
+  // Whole days in New York time, not UTC (B7).
+  const range = dayRange(q.from, q.to);
 
   const [stages, invoices, payments] = await Promise.all([
     prisma.stage.findMany({ orderBy: { id: "asc" } }),
@@ -84,7 +85,7 @@ router.get("/reports/overview", async (_req, res) => {
     prisma.lesson.findMany({ where: { status: "ACTIVE", endDate: { gte: toDate(today) } }, select: { id: true, capacity: true } }),
     prisma.enrollment.count({ where: { status: "ACTIVE", lesson: { status: "ACTIVE", endDate: { gte: toDate(today) } } } }),
     prisma.invoice.findMany({ where: { status: "UNPAID" }, include: { payments: true } }),
-    prisma.payment.findMany({ where: { receivedAt: { gte: toDate(`${today.slice(0, 7)}-01`) } } }),
+    prisma.payment.findMany({ where: { receivedAt: { gte: startOfDay(`${today.slice(0, 7)}-01`) } } }),
   ]);
   const seats = lessons.reduce((s, l) => s + l.capacity, 0);
   res.json({

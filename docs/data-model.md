@@ -44,6 +44,9 @@ so the database rejects bad data even if the API had a bug.
 4. **Pay** → admins record any amount up to the balance; families pay the full balance by card.
    Status becomes PAID when payments minus refunds ≥ amount.
 5. **Cancel enrollment** → invoice with no payments is voided; otherwise left for an admin to refund.
+   **Refund** → any amount up to what was paid. Refunding a swimmer who is still enrolled cancels the
+   enrollment in the same step (the admin confirms it). After a refund on a cancelled enrollment the
+   invoice is REFUNDED and nothing more is owed, even if part of the money was kept.
 6. **Cancel lesson** → every enrollment cancelled, unpaid invoices voided, paid ones flagged.
 7. **Price change** → only affects enrollments on or after the effective date.
 
@@ -57,6 +60,7 @@ so the database rejects bad data even if the API had a bug.
 | Templates                         | ✓ | ✗ | ✗ | ✗ |
 | Enroll                            | anyone | ✗ | own children | self |
 | Cancel enrollment                 | any | ✗ | own children | self |
+| Edit a swimmer's name / birthday  | ✓ | ✗ | own children | self |
 | Add a swimmer                     | ✓ (to a parent) | ✗ | own children | ✗ |
 | Change a swimmer's stage          | ✓ | swimmers in own lessons | ✗ | ✗ |
 | See invoices                      | all | ✗ | billed to them | billed to them |

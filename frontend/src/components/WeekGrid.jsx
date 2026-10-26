@@ -1,4 +1,4 @@
-import { DAYS, WEEK_ORDER, time12, toMinutes } from "../lib/format";
+import { DAYS, WEEK_ORDER, addDays, time12, toMinutes, todayISO } from "../lib/format";
 import { CoachTag } from "./ui";
 
 const HOUR_PX = 72;
@@ -37,7 +37,7 @@ function layoutDay(items) {
  * Monday-to-Sunday calendar of weekly items (lessons or template slots),
  * colored by stage with a coach tag on each block.
  */
-export default function WeekGrid({ items, onSelect, emptyText = "Nothing scheduled." }) {
+export default function WeekGrid({ items, onSelect, weekStart, emptyText = "Nothing scheduled." }) {
   if (!items.length) {
     return <div className="card px-6 py-12 text-center text-sm text-muted">{emptyText}</div>;
   }
@@ -53,11 +53,17 @@ export default function WeekGrid({ items, onSelect, emptyText = "Nothing schedul
       <div className="min-w-[760px]">
         <div className="grid grid-cols-[56px_repeat(7,minmax(0,1fr))] border-b border-line bg-canvas text-xs font-semibold tracking-wide text-muted uppercase">
           <div />
-          {WEEK_ORDER.map((d) => (
-            <div key={d} className="border-l border-line px-2 py-2 text-center">
-              {DAYS[d].slice(0, 3)}
-            </div>
-          ))}
+          {WEEK_ORDER.map((d, i) => {
+            // With a week chosen (the schedule), show each column's date; templates have none.
+            const date = weekStart ? addDays(weekStart, i) : null;
+            const isToday = date === todayISO();
+            return (
+              <div key={d} className={`border-l border-line px-2 py-2 text-center ${isToday ? "bg-primary/10 text-primary" : ""}`}>
+                {DAYS[d].slice(0, 3)}
+                {date && <span className="ml-1 font-normal normal-case">{Number(date.slice(8))}</span>}
+              </div>
+            );
+          })}
         </div>
         <div className="grid grid-cols-[56px_repeat(7,minmax(0,1fr))]" style={{ height }}>
           <div className="relative">

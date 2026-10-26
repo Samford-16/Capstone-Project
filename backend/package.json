@@ -10,7 +10,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
-    "db:reset": "prisma migrate reset --force",
+    "db:reset": "prisma migrate reset --force && prisma db seed",
     "db:studio": "prisma studio",
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "postinstall": "prisma generate"
@@ -19,8 +19,8 @@
     "node": ">=20.19"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.10.0",
-    "@prisma/client": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
@@ -30,11 +30,11 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "prisma": "^7.10.0",
+    "prisma": "^7.10.1",
     "supertest": "^7.1.4"
   },
   "allowScripts": {
-    "prisma@7.10.0": true,
-    "@prisma/engines@7.10.0": true
+    "prisma@7.10.1": true,
+    "@prisma/engines@7.10.1": true
   }
 }

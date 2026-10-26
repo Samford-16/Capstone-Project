@@ -63,6 +63,9 @@ Test cards: `4242 4242 4242 4242` succeeds, `4000 0000 0000 0002` is declined. A
 expiry and any 3-digit CVC.
 
 `npm run db:reset` (in `backend/`) wipes the database, reruns migrations and reseeds.
+Use that rather than `npx prisma migrate reset` on its own: with `prisma.config.ts`,
+Prisma 7 no longer runs the seed after a reset, so the database comes back with no
+accounts. If that happens, run `npx prisma db seed`.
 
 ## Stripe payments (test mode)
 
@@ -92,7 +95,7 @@ Billing. To also record it if they close the tab first, install the Stripe CLI a
 
 ```bash
 cd backend
-npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 33 API tests
+npm test        # wipes and reseeds TEST_DATABASE_URL, then runs 38 API tests
 ```
 
 The tests cover each backend commitment: login and roles, coaches seeing only their own

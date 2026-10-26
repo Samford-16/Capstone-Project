@@ -5,6 +5,20 @@ Entries that were later replaced are marked **Superseded** and link to what repl
 
 ---
 
+## 2026-10-26: Refunds are for cancelled enrollments; partial refunds settle the invoice
+**Decision:** An admin can refund any amount up to what was paid. If the swimmer is still enrolled, the refund also cancels the enrollment and frees the seat, and the admin has to tick a box confirming that (the API returns ENROLLMENT_ACTIVE otherwise). After any refund on a cancelled enrollment the invoice is REFUNDED with nothing owed, even if the school kept part of the money for sessions already attended.
+**Why:** Bug log G5. Before this, refunding an active enrollment left the swimmer in the class with nothing paid, and a partial refund put the invoice back to UNPAID with the refunded amount owed again. Both are states a bookkeeper would have to fix by hand.
+**Tradeoff:** A goodwill credit for a student who stays enrolled can't be entered as a refund. That case belongs with G4 (credits for cancelled sessions), which is still open.
+**Note:** This is a default chosen while fixing G5. Sami and William should confirm it; changing it is limited to the refund route in `backend/src/routes/invoices.js` and `statusFor` in `backend/src/lib/billing.js`.
+
+## 2026-10-26: The schedule shows one week at a time
+**Decision:** The Week and List views show a single Monday-to-Sunday week with arrows to move between weeks. The API takes `weekOf` and returns only lessons that actually meet that week.
+**Why:** Bug log G3. After a template was applied to a future term, the grid showed both terms at once (18 classes instead of 9) and cut off class names.
+
+## 2026-10-26: Date ranges on timestamps use New York days
+**Decision:** Report and invoice date filters start at midnight in New York, not midnight UTC.
+**Why:** Bug log B7. With UTC, anything after 8 PM (7 PM in winter) fell into the next day, so evening payments dropped out of "today" and "this month."
+
 ## 2026-10-12: Stripe Checkout for online payments (test mode)
 **Decision:** Families pay through Stripe Checkout, Stripe's hosted payment page. The backend creates a checkout session for the invoice balance; when the family returns, the backend retrieves the session from Stripe and records the payment. A signed webhook records it too, in case the family closes the tab. The PaymentIntent id (`pi_...`) is the payment reference and is checked under a row lock, so a payment is recorded exactly once no matter how many times it's confirmed. Refunds of Stripe payments are sent back through Stripe's Refunds API.
 **Why:** The backend proposal's stretch goal. Hosted Checkout keeps card data off our server entirely (the simplest PCI posture) and needs less code than building a card form with Stripe Elements.

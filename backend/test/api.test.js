@@ -256,11 +256,38 @@ describe("Bookkeeping", () => {
     const rest = await api(admin).post(`/invoices/${inv.id}/payments`).send({ amountCents: inv.amountCents - 1000, method: "CHECK", reference: "#55" });
     assert.equal(rest.body.invoice.status, "PAID");
 
-    const refund = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away" });
+    // G5: refunding a swimmer who is still enrolled must cancel the enrollment too.
+    const blocked = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away" });
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.body.code, "ENROLLMENT_ACTIVE");
+
+    const refund = await api(admin).post(`/invoices/${inv.id}/refund`).send({ reason: "Moved away", cancelEnrollment: true });
+    assert.equal(refund.status, 200, JSON.stringify(refund.body));
     assert.equal(refund.body.status, "REFUNDED");
     assert.equal(refund.body.paidCents, 0);
     assert.equal(refund.body.balanceCents, 0, "a refunded invoice owes nothing");
+    assert.equal(refund.body.enrollment.status, "CANCELLED", "the seat is freed");
     assert.equal((await api(parent).post(`/invoices/${inv.id}/refund`)).status, 403);
+  });
+
+  it("allows a partial refund on a cancelled enrollment and settles the invoice", async () => {
+    const lesson = await newLesson();
+    const kid = await newChild(parent, "Partial");
+    const enr = (await api(parent).post("/enrollments").send({ lessonId: lesson.id, swimmerId: kid.id })).body;
+    const inv = enr.invoice;
+    await api(admin).post(`/invoices/${inv.id}/payments`).send({ amountCents: inv.amountCents, method: "CASH" });
+    const cancel = await api(parent).post(`/enrollments/${enr.id}/cancel`);
+    assert.equal(cancel.body.invoiceAction, "refund_review");
+
+    const tooMuch = await api(admin).post(`/invoices/${inv.id}/refund`).send({ amountCents: inv.amountCents + 1 });
+    assert.equal(tooMuch.status, 400);
+
+    const kept = 1000;
+    const res = await api(admin).post(`/invoices/${inv.id}/refund`).send({ amountCents: inv.amountCents - kept, method: "CASH", reason: "Attended one class" });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.status, "REFUNDED", "settled, not back to UNPAID");
+    assert.equal(res.body.paidCents, kept, "the school keeps what was not refunded");
+    assert.equal(res.body.balanceCents, 0, "nothing is owed after a refund");
   });
 
   it("cancelling a lesson voids unpaid invoices and flags paid ones for refund", async () => {
@@ -276,6 +303,26 @@ describe("Bookkeeping", () => {
     assert.equal((await prisma.invoice.findUnique({ where: { id: invA.id } })).status, "VOID");
     assert.equal((await prisma.invoice.findUnique({ where: { id: invB.id } })).status, "PAID");
     assert.equal((await api(admin).delete(`/lessons/${lesson.id}`)).status, 409, "history blocks hard delete");
+  });
+
+  it("counts evening activity in New York's day, not UTC's (B7)", async () => {
+    const { startOfDay } = require("../src/lib/dates");
+    const today = todayISO();
+    const lesson = await newLesson();
+    const kid = await newChild(parent, "Evening");
+    const inv = (await api(parent).post("/enrollments").send({ lessonId: lesson.id, swimmerId: kid.id })).body.invoice;
+    // 11:30 PM in New York today, which is already tomorrow in UTC.
+    const lateTonight = new Date(startOfDay(today).getTime() + (23 * 60 + 30) * 60000);
+    await prisma.invoice.update({ where: { id: inv.id }, data: { issuedAt: lateTonight } });
+    await prisma.payment.create({ data: { invoiceId: inv.id, kind: "PAYMENT", method: "CASH", amountCents: 500, receivedAt: lateTonight } });
+
+    const todayOnly = (await api(admin).get(`/reports/summary?from=${today}&to=${today}&groupBy=stage`)).body;
+    assert.ok(todayOnly.totals.invoicedCents >= inv.amountCents, "tonight's invoice is in today's report");
+    assert.ok(todayOnly.totals.collectedCents >= 500, "tonight's payment is in today's report");
+    const tomorrow = (await api(admin).get(`/reports/summary?from=${addDays(today, 1)}&to=${addDays(today, 1)}`)).body;
+    assert.equal(tomorrow.totals.collectedCents, 0, "and not in tomorrow's");
+    const listed = (await api(admin).get(`/invoices?from=${today}&to=${today}`)).body;
+    assert.ok(listed.some((i) => i.id === inv.id), "the invoice date filter agrees");
   });
 
   it("summarizes finances by stage and by month, and the totals agree", async () => {
@@ -344,6 +391,24 @@ describe("Scheduling", () => {
     assert.ok(mine.length > 0 && mine.every((l) => l.myEnrollments.length > 0));
   });
 
+  it("returns one week of the schedule at a time (G3)", async () => {
+    const today = todayISO();
+    const thisWeek = (await api(parent).get(`/lessons?weekOf=${today}`)).body;
+    assert.ok(thisWeek.length > 0);
+    const monday = addDays(today, -((new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7));
+    for (const l of thisWeek) {
+      assert.ok(l.weekDate >= monday && l.weekDate <= addDays(monday, 6), "weekDate is inside the week");
+      assert.ok(l.weekDate >= l.startDate && l.weekDate <= l.endDate, "the lesson really meets that week");
+    }
+    const ids = thisWeek.map((l) => `${l.dayOfWeek} ${l.startTime} ${l.name}`);
+    assert.equal(new Set(ids).size, ids.length, "no class appears twice in one week");
+
+    const lesson = await newLesson();
+    assert.ok(!(await api(parent).get(`/lessons?weekOf=${addDays(today, 7 * 6)}`)).body.some((l) => l.id === lesson.id), "a 4-week class is gone by week 6");
+    assert.equal((await api(parent).get(`/lessons?weekOf=${addDays(today, 7 * 60)}`)).body.length, 0);
+    assert.equal((await api(parent).get("/lessons?weekOf=not-a-date")).status, 400);
+  });
+
   it("returns dated sessions for the daily view", async () => {
     const today = todayISO();
     const res = await api(parent).get(`/sessions?from=${today}&to=${addDays(today, 6)}`);
@@ -358,5 +423,30 @@ describe("Scheduling", () => {
     assert.equal((await api(parent).patch(`/swimmers/${kidId}`).send({ stageId: 5 })).status, 403);
     assert.equal((await api(parent).patch(`/swimmers/${kidId}`).send({ firstName: "Renamed" })).status, 200);
     assert.equal((await api(admin).patch(`/swimmers/${kidId}`).send({ stageId: 3 })).body.stageId, 3);
+  });
+
+  it("lets a parent fix a child's name and birthday, but not another family's (G2)", async () => {
+    const kid = await newChild(parent, "Mark");
+    const fixed = await api(parent).patch(`/swimmers/${kid.id}`).send({ firstName: "Mark", lastName: "Rivera", dateOfBirth: "2019-02-03" });
+    assert.equal(fixed.status, 200, JSON.stringify(fixed.body));
+    assert.equal(fixed.body.name, "Mark Rivera");
+    assert.equal(fixed.body.dateOfBirth, "2019-02-03");
+    assert.equal((await api(otherParent).patch(`/swimmers/${kid.id}`).send({ lastName: "Nope" })).status, 403);
+  });
+
+  it("lets a coach change the stage of a swimmer in their own lesson (G1)", async () => {
+    const lessons = (await api(coachMike).get("/lessons")).body;
+    const withRoster = [];
+    for (const l of lessons) {
+      const detail = (await api(coachMike).get(`/lessons/${l.id}`)).body;
+      if (detail.roster.length) withRoster.push(detail);
+    }
+    assert.ok(withRoster.length > 0, "Mike has at least one swimmer");
+    const sw = withRoster[0].roster[0].swimmer;
+    const next = sw.stageId === 4 ? 3 : 4;
+    const res = await api(coachMike).patch(`/swimmers/${sw.id}`).send({ stageId: next });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.stageId, next);
+    assert.equal((await api(coachMike).patch(`/swimmers/${sw.id}`).send({ firstName: "X" })).status, 403);
   });
 });

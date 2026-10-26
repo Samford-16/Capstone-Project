@@ -8,7 +8,7 @@ import { useToast } from "../components/Toast";
 import { useApi } from "../lib/useApi";
 import { qs } from "../lib/api";
 import { useAuth, useRole } from "../lib/auth";
-import { DAYS, WEEK_ORDER, addDays, longDate, money, timeRange, todayISO } from "../lib/format";
+import { DAYS, WEEK_ORDER, addDays, longDate, mondayOf, money, timeRange, todayISO, weekLabel } from "../lib/format";
 
 const VIEW_KEY = "current.scheduleView";
 function savedView() {
@@ -35,6 +35,10 @@ export default function Schedule() {
   };
   const [filters, setFilters] = useState({ stageId: "", coachId: "", dayOfWeek: "", availability: "", enrolled: "", sort: "time" });
   const [day, setDay] = useState(todayISO());
+  // Week and List views show one week at a time (G3), so a future term
+  // created from a template appears only in its own weeks.
+  const [weekStart, setWeekStart] = useState(() => mondayOf(todayISO()));
+  const thisWeek = mondayOf(todayISO());
   const [openLessonId, setOpenLessonId] = useState(null);
   const [creating, setCreating] = useState(false);
 
@@ -42,9 +46,9 @@ export default function Schedule() {
   const clearFilters = () => setFilters((f) => ({ stageId: "", coachId: "", dayOfWeek: "", availability: "", enrolled: "", sort: f.sort }));
   const activeFilterCount = ["stageId", "coachId", "dayOfWeek", "availability", "enrolled"].filter((k) => filters[k]).length;
 
-  const lessons = useApi(`/lessons${qs(filters)}`);
+  const lessons = useApi(`/lessons${qs({ ...filters, weekOf: weekStart })}`);
   // Unfiltered list for the stat tiles, so totals don't change when filters do.
-  const allLessons = useApi("/lessons");
+  const allLessons = useApi(`/lessons${qs({ weekOf: weekStart })}`);
   const sessions = useApi(
     view === "day" ? `/sessions${qs({ from: day, to: day, stageId: filters.stageId, coachId: filters.coachId })}` : null,
   );
@@ -105,7 +109,7 @@ export default function Schedule() {
           <>
             <StatTile label="My lessons" value={allRows.length} />
             <StatTile label="Swimmers" value={allRows.reduce((s, l) => s + l.enrolledCount, 0)} />
-            <StatTile label="Classes per week" value={allRows.length} />
+            <StatTile label="Classes this week" value={allRows.length} />
             <StatTile label="Open seats" value={allRows.reduce((s, l) => s + l.spotsLeft, 0)} />
           </>
         )}
@@ -191,15 +195,23 @@ export default function Schedule() {
         </div>
       </div>
 
+      {view !== "day" && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button className="btn-secondary btn-sm" onClick={() => setWeekStart((w) => addDays(w, -7))} aria-label="Previous week">←</button>
+          <span className="min-w-[200px] text-center font-semibold">Week of {weekLabel(weekStart)}</span>
+          <button className="btn-secondary btn-sm" onClick={() => setWeekStart((w) => addDays(w, 7))} aria-label="Next week">→</button>
+          {weekStart !== thisWeek && <button className="btn-ghost btn-sm" onClick={() => setWeekStart(thisWeek)}>This week</button>}
+        </div>
+      )}
       <div className="mb-3"><StageLegend stages={stages} /></div>
       <ErrorBanner error={lessons.error || sessions.error} />
 
       {view === "week" && (lessons.loading && !lessons.data ? <Spinner /> : (
-        <WeekGrid items={rows} onSelect={(l) => setOpenLessonId(l.id)} emptyText={activeFilterCount ? "No lessons match these filters." : "No lessons scheduled yet."} />
+        <WeekGrid items={rows} weekStart={weekStart} onSelect={(l) => setOpenLessonId(l.id)} emptyText={activeFilterCount ? "No lessons match these filters." : "No lessons this week."} />
       ))}
 
       {view === "list" && (lessons.loading && !lessons.data ? <Spinner /> : rows.length === 0 ? (
-        <EmptyState title="No lessons match">Try clearing some filters.</EmptyState>
+        <EmptyState title="No lessons match">{activeFilterCount ? "Try clearing some filters." : "Nothing meets this week. Try another week."}</EmptyState>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {rows.map((l) => <LessonCard key={l.id} lesson={l} mySwimmers={user.swimmers} onOpen={() => setOpenLessonId(l.id)} />)}
