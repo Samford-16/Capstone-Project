@@ -143,6 +143,5 @@ docs/
 
 ## Not built yet
 
-- Attendance tracking (was in SwimSync; not in either proposal).
 - Email notifications and password reset.
 - Terms or seasons as a first-class concept. Lessons carry their own start and end dates.
